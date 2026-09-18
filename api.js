@@ -664,28 +664,13 @@ export const Api = {
     return alPage({ page, sort: ['POPULARITY_DESC'], genre, isAdult: adult ? undefined : false });
   },
 
-  /** MyAnimeList title search, official API first. */
-  async malSearch(q, { adult, page = 1, format = null }) {
-    /* v2 rejects anything shorter than three characters. */
-    if (q.trim().length < 3) {
-      const e = new Error('Type at least three letters');
-      e.code = 'too-short';
-      throw e;
-    }
-    return malPage('/anime', { q: q.trim() }, {
-      adult, page, limit: 20,
-      keep: format ? n => MAL_FORMAT[n.media_type] === format : null
-    });
-  },
-
-  async jikanSearch(q, { adult, page = 1, format = null, genre = null }) {
-    const f = format ? `&type=${format.toLowerCase()}` : '';
-    const g = genre ? `&genres=${encodeURIComponent(genre)}` : '';
-    const d = await jikan(`/anime?q=${encodeURIComponent(q)}&limit=20&sfw=${adult ? 'false' : 'true'}${f}${g}&page=${page}`);
-    return { items: (d || []).map(fromJikan).filter(Boolean), hasNext: (d || []).length === 20, page };
-  },
-
-  async alSearch(q, { adult, page = 1, format = null, genre = null }) {
+  /**
+   * Title search. Always AniList, regardless of which catalogue is selected
+   * for browsing — its search is fast, has no rate limit, and needs no
+   * client ID, so there is no reason to route a search box through MAL.
+   */
+  async search(q, { adult, page = 1, format = null, genre = null }) {
+    if (!q || !q.trim()) return { items: [], hasNext: false, page };
     const Q = `
       query ($q:String,$page:Int,$format:MediaFormat,$genre:String,$isAdult:Boolean){
         Page(page:$page, perPage:20){
@@ -694,38 +679,12 @@ export const Api = {
                 format:$format, genre:$genre, isAdult:$isAdult){ ${F_CARD} }
         }
       }`;
-    const d = await anilist(Q, { q, page, format, genre, isAdult: adult ? undefined : false });
+    const d = await anilist(Q, { q: q.trim(), page, format, genre, isAdult: adult ? undefined : false });
     return {
       items: (d?.Page?.media || []).map(fromAniList).filter(Boolean),
       hasNext: !!d?.Page?.pageInfo?.hasNextPage,
       page
     };
-  },
-
-  /**
-   * Title search. The chosen catalogue is asked first; if it errors or comes
-   * back empty the other one is asked too, so a title that exists is never
-   * reported as missing just because one service is having a bad day.
-   */
-  async search(q, { source, adult, page = 1, format = null, genre = null }) {
-    if (!q || !q.trim()) return { items: [], hasNext: false, page };
-    const opts = { adult, page, format, genre };
-
-    const attempts = source === 'mal'
-      ? [() => Api.malSearch(q, opts), () => Api.jikanSearch(q, opts), () => Api.alSearch(q, opts)]
-      : [() => Api.alSearch(q, opts), () => Api.jikanSearch(q, opts)];
-
-    let lastError = null;
-    for (const attempt of attempts) {
-      try {
-        const res = await attempt();
-        if (res.items.length) return res;
-      } catch (err) {
-        if (err.code !== 'no-client-id' && err.code !== 'too-short') lastError = err;
-      }
-    }
-    if (lastError) throw lastError;
-    return { items: [], hasNext: false, page };
   },
 
   /** Full record for the detail page. */

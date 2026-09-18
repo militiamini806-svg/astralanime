@@ -284,7 +284,7 @@ async function runSearch() {
     if (seq !== searchState.seq) return;
     results.innerHTML = res.items.length
       ? V.grid(res.items)
-      : V.empty('No matches', `Nothing came back for “${q || genre}”. Try a shorter title or the other catalogue in Settings.`);
+      : V.empty('No matches', `Nothing came back for “${q || genre}”. Try a shorter or differently spelled title.`);
   } catch (err) {
     if (seq !== searchState.seq) return;
     results.innerHTML = V.empty('Search failed', err.message);
