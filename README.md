@@ -71,6 +71,40 @@ to AniList if the official MAL request is unavailable. Jikan is kept only as a
 read fallback and is rate limited to about 3 requests a second, so `api.js`
 queues its calls.
 
+## Playback source priority
+
+Episode playback now tries the Anivexa API first, then falls back to the
+existing MegaPlay embed if Anivexa is unavailable or returns no playable
+source. Anivexa is queried only for AniList catalogue records because its
+routes require an AniList ID. MyAnimeList-only records continue directly to
+MegaPlay.
+
+For local testing, start Anivexa on port 4000:
+
+```bash
+cd Anivexa-API
+npm install
+npm start
+```
+
+The packaged app is configured to use `https://anixera.up.railway.app`. For a
+different Android APK or hosted web build, edit
+`DEFAULT_ANIVEXA_API_BASE` near the top of `api.js` to the public HTTPS URL of
+your deployed Anivexa API. The app requests providers in this order:
+
+```text
+reanime → anikoto → animegg → aniwaves → mkissa → 2dhive → anizone → anibd → kaa
+```
+
+When Anivexa returns multiple variants, the player shows a quality selector
+and lets the viewer switch without leaving the episode. Direct HLS/MP4
+results use the in-app video element. Embed results use the in-app iframe. If
+direct playback fails, MegaPlay is loaded automatically.
+
+The player also exposes two manual server buttons: **Server 1 — Anivexa** and
+**Server 2 — MegaPlay**. Anivexa is selected by default when it has a source,
+but the viewer can switch to MegaPlay manually.
+
 ## Signing in to AniList
 
 The app uses the implicit grant with AniList's own pin page as the redirect, so

@@ -1,6 +1,6 @@
 /* app.js — routing, events, orchestration. */
 
-import { Api } from './api.js';
+import { Api, anivexaPlayback, playbackUrl } from './api.js';
 import { Store } from './store.js';
 import { Auth, authUrl } from './auth.js';
 import * as V from './views.js';
@@ -18,8 +18,63 @@ let libTab = 'all';
 let playerState = null;
 let playerLandscape = false;
 let playerRotateFullscreen = false;
+let pendingUpdate = null;
 
 const ctx = () => ({ source: Store.settings.source, adult: Store.settings.adult });
+
+/* ── update check ────────────────────────────────────────────
+ * The APK has no auto-update channel (it isn't on the Play Store), so the
+ * app checks GitHub Releases for the source repo on every cold start and
+ * points the user at the newest APK + the WhatsApp channel if it's behind.
+ * Bump APP_VERSION here (and tag/release the same string on GitHub, e.g.
+ * "v0.2.0") whenever you cut a new build. */
+const APP_VERSION = '0.1.0';
+const UPDATE_REPO = 'northernblader-sys/cloud-astral';
+const UPDATE_RELEASES_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+const UPDATE_WHATSAPP_URL = 'https://whatsapp.com/channel/0029VaqhhiQA2pL54CiJ0x2p';
+/* Set true to make the popup block the app until the user updates. */
+const FORCE_UPDATE = false;
+
+function parseVersion(v) {
+  return String(v || '').trim().replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+}
+
+function isNewer(remote, local) {
+  const r = parseVersion(remote), l = parseVersion(local);
+  for (let i = 0; i < Math.max(r.length, l.length); i++) {
+    const rv = r[i] || 0, lv = l[i] || 0;
+    if (rv !== lv) return rv > lv;
+  }
+  return false;
+}
+
+async function checkForUpdate() {
+  try {
+    const res = await fetch(UPDATE_RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) return; // no releases published yet, or offline — fail silently
+    const rel = await res.json();
+    const tag = rel.tag_name || rel.name || '';
+    if (!tag || !isNewer(tag, APP_VERSION)) return;
+
+    const cleanVersion = tag.replace(/^v/i, '');
+    if (!FORCE_UPDATE && Store.settings.updateSkippedVersion === cleanVersion) return;
+
+    const apkAsset = (rel.assets || []).find(a => /\.apk$/i.test(a.name || ''));
+    const downloadUrl = apkAsset?.browser_download_url || rel.html_url
+      || `https://github.com/${UPDATE_REPO}/releases/latest`;
+
+    pendingUpdate = { version: cleanVersion };
+    openSheet(V.updateView({
+      version: cleanVersion,
+      notes: (rel.body || '').split('\n').find(l => l.trim()) || '',
+      downloadUrl,
+      whatsappUrl: UPDATE_WHATSAPP_URL,
+      force: FORCE_UPDATE
+    }));
+  } catch {
+    /* offline, blocked network, or CORS in the browser preview — ignore */
+  }
+}
 
 /* ── toast ───────────────────────────────────────────────── */
 
@@ -55,20 +110,103 @@ function openPlayer(m, episode = null, language = Store.settings.playbackLanguag
   const total = V.episodeRows(m).length;
   const progress = Store.entry(m.src, m.id)?.progress || 0;
   const chosen = Number(episode) || Math.min(progress + 1, total || 1);
-  playerState = { media: m, episode: Math.max(1, chosen), language };
+  playerState = {
+    media: m,
+    episode: Math.max(1, chosen),
+    language,
+    playbackRequest: 0,
+    anivexaPlayback: null
+  };
+  const state = playerState;
   const host = document.createElement('div');
   host.id = 'player-host';
-  host.innerHTML = V.playerView(m, playerState.episode, playerState.language);
+  host.innerHTML = V.playerView(m, state.episode, state.language);
   document.body.appendChild(host);
   document.body.style.overflow = 'hidden';
+  loadPlayerPlayback(state);
 }
 
 function closePlayer() {
-  /* remove the node so the iframe stops playing */
+  /* Remove the node so an iframe/video stops playing. */
   resetPlayerOrientation();
   document.getElementById('player-host')?.remove();
   playerState = null;
   document.body.style.overflow = '';
+}
+
+function setPlayerHint(text) {
+  const hint = document.querySelector('[data-player-hint]');
+  if (hint) hint.textContent = text;
+}
+
+function updatePlayerServers(state) {
+  document.querySelectorAll('[data-player-server]').forEach(button => {
+    const server = button.dataset.playerServer;
+    const active = server === 'megaplay'
+      ? state.playback?.provider === 'megaplay'
+      : Boolean(state.anivexaPlayback) && state.playback?.provider !== 'megaplay';
+    button.classList.toggle('on', active);
+    button.disabled = server === 'anivexa' && !state.anivexaPlayback;
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function renderPlayerPlayback(state, playback, hint) {
+  if (playerState !== state) return;
+  const frame = document.querySelector('#player .player-frame');
+  if (!frame) return;
+
+  state.playback = playback;
+  frame.innerHTML = V.playerSurface(state.media, state.episode, playback);
+  const quality = document.querySelector('[data-player-quality-container]');
+  if (quality) quality.innerHTML = V.playerQualityControl(playback);
+  setPlayerHint(hint);
+  updatePlayerServers(state);
+
+  const video = frame.querySelector('video');
+  if (video) {
+    video.addEventListener('error', () => {
+      if (playerState !== state) return;
+      renderMegaPlayFallback(state, 'Anivexa playback failed · MegaPlay fallback');
+    }, { once: true });
+    video.play?.().catch(() => {});
+  }
+}
+
+function renderMegaPlayFallback(state, hint = 'Anivexa unavailable · MegaPlay fallback') {
+  if (playerState !== state) return;
+  const url = playbackUrl(state.media, state.episode, state.language);
+  if (!url) {
+    renderPlayerPlayback(state, null, 'No playable source available');
+    return;
+  }
+  renderPlayerPlayback(state, { kind: 'iframe', url, provider: 'megaplay' }, hint);
+}
+
+async function loadPlayerPlayback(state) {
+  if (playerState !== state || !V.episodeRows(state.media).length) return;
+  const request = ++state.playbackRequest;
+
+  try {
+    const primary = await anivexaPlayback(state.media, state.episode, state.language);
+    if (playerState !== state || state.playbackRequest !== request) return;
+    if (primary) {
+      state.anivexaPlayback = primary;
+      const quality = primary.quality && primary.quality !== 'Auto'
+        ? ` · ${primary.quality}`
+        : '';
+      renderPlayerPlayback(state, primary, `${primary.label || 'Anivexa'}${quality}`);
+      return;
+    }
+    state.anivexaPlayback = null;
+  } catch {
+    /* The fallback below is the expected path when Anivexa is unreachable. */
+    state.anivexaPlayback = null;
+  }
+
+  if (playerState === state && state.playbackRequest === request) {
+    renderMegaPlayFallback(state);
+  }
 }
 
 function updatePlayerOrientationButton() {
@@ -267,6 +405,9 @@ async function hydratePlayer(src, id, episode) {
     nextBtn.classList.remove('disabled');
     nextBtn.removeAttribute('disabled');
   }
+
+  /* A library stub may not contain the AniList ID needed by Anivexa. */
+  loadPlayerPlayback(playerState);
 }
 
 /* ── routes ──────────────────────────────────────────────── */
@@ -524,6 +665,16 @@ document.addEventListener('click', async e => {
   if (t.closest('[data-close]')) { closeSheet(); return; }
   if (t.closest('[data-player-close]')) { closePlayer(); return; }
 
+  if (t.closest('[data-update-later]')) {
+    if (pendingUpdate) Store.set({ updateSkippedVersion: pendingUpdate.version });
+    closeSheet();
+    return;
+  }
+  if (t.closest('[data-update-download]')) {
+    // let the link open normally; just close the sheet behind it
+    setTimeout(closeSheet, 200);
+  }
+
   if (t.closest('[data-browse]')) {
     openSheet(V.browseSheet());
     return;
@@ -548,6 +699,29 @@ document.addEventListener('click', async e => {
   if (playerEpisode && playerState) {
     const n = Number(playerEpisode.dataset.playerEpisode);
     if (n > 0) openPlayer(playerState.media, n, playerState.language);
+    return;
+  }
+
+  const playerServer = t.closest('[data-player-server]');
+  if (playerServer && playerState) {
+    if (playerServer.dataset.playerServer === 'megaplay') {
+      renderMegaPlayFallback(playerState, 'MegaPlay selected · Server 2');
+      return;
+    }
+
+    if (playerState.anivexaPlayback) {
+      const primary = playerState.anivexaPlayback;
+      const quality = primary.quality && primary.quality !== 'Auto'
+        ? ` · ${primary.quality}`
+        : '';
+      renderPlayerPlayback(
+        playerState,
+        primary,
+        `${primary.label || 'Anivexa · Server 1'}${quality}`
+      );
+    } else {
+      toast('Anivexa is unavailable for this episode');
+    }
     return;
   }
 
@@ -827,6 +1001,26 @@ document.addEventListener('click', async e => {
 });
 
 document.addEventListener('change', async e => {
+  const quality = e.target.closest('[data-player-quality]');
+  if (quality && playerState) {
+    const selected = playerState.playback?.variants?.find(
+      variant => variant.url === quality.value
+    );
+    if (selected) {
+      const source = playerState.playback;
+      const label = source.label || `Anivexa · ${source.provider || 'provider'}`;
+      const qualityLabel = selected.quality && selected.quality !== 'Auto'
+        ? ` · ${selected.quality}`
+        : '';
+      renderPlayerPlayback(playerState, {
+        ...source,
+        ...selected,
+        variants: source.variants
+      }, `${label}${qualityLabel}`);
+    }
+    return;
+  }
+
   if (e.target.id === 'importfile' && e.target.files[0]) {
     try {
       const n = Store.import(await e.target.files[0].text());
@@ -905,6 +1099,7 @@ Store.subscribe(() => {
 
 if (!location.hash) location.hash = '#/home';
 route();
+checkForUpdate();
 
 /* drop the splash once the first screen is in the DOM */
 function dropSplash() {

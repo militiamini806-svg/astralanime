@@ -32,7 +32,31 @@ const MAL_API = Object.freeze({
 });
 /* Public MAL client identifier supplied for this app. Never embed a client secret. */
 export const MAL_CLIENT_ID = '9d0b4b170abeb96077a4933abfae80b3';
-const PLAYBACK_BASE = 'https://megaplay.buzz';
+const MEGAPLAY_BASE = 'https://megaplay.buzz';
+
+/*
+ * The Anivexa API is a separate Node service. For local testing, run it on
+ * port 4000. For an APK or hosted web build, replace this value with the
+ * public HTTPS URL where you deploy Anivexa, or define
+ * window.ANIVEXA_API_BASE before this module loads.
+ */
+const DEFAULT_ANIVEXA_API_BASE = 'https://anixera.up.railway.app';
+export const ANIVEXA_API_BASE = String(
+  globalThis.ANIVEXA_API_BASE || DEFAULT_ANIVEXA_API_BASE
+).replace(/\/+$/, '');
+
+/* The order is intentional: the first healthy provider wins. */
+export const ANIVEXA_PROVIDER_ORDER = [
+  'reanime',
+  'anikoto',
+  'animegg',
+  'aniwaves',
+  'mkissa',
+  '2dhive',
+  'anizone',
+  'anibd',
+  'kaa'
+].map(name => name.toLowerCase());
 
 /**
  * Build the private playback route for a title.
@@ -46,7 +70,131 @@ export function playbackUrl(media, episode, language = 'sub') {
 
   const route = media.src === 'mal' ? 'mal' : 'ani';
   const audio = language === 'dub' ? 'dub' : 'sub';
-  return `${PLAYBACK_BASE}/stream/${route}/${id}/${ep}/${audio}`;
+  return `${MEGAPLAY_BASE}/stream/${route}/${id}/${ep}/${audio}`;
+}
+
+function anivexaWatchUrl(provider, anilistId, episode, language) {
+  const audio = language === 'dub' ? 'dub' : 'sub';
+  return `${ANIVEXA_API_BASE}/watch/${provider}/${anilistId}/${audio}/${provider}-${episode}`;
+}
+
+function candidateUrl(value) {
+  if (typeof value !== 'string') return '';
+  const url = value.trim();
+  if (!/^https?:\/\//i.test(url)) return '';
+  return url;
+}
+
+function candidateKind(url) {
+  return /\.(?:m3u8|mp4|webm)(?:$|[?#])/i.test(url) ? 'video' : 'iframe';
+}
+
+function candidateQuality(value) {
+  if (!value || typeof value !== 'object') return '';
+  return String(
+    value.quality ||
+    value.resolution ||
+    value.label ||
+    value.name ||
+    value.type ||
+    ''
+  ).trim();
+}
+
+/*
+ * Provider response shapes differ slightly. Keep the normalisation here so
+ * the player does not need to know whether a source came from `streams`,
+ * `sources`, `allServers`, or a direct `stream_url` field.
+ */
+function collectPlaybackCandidates(data) {
+  const candidates = [];
+  const seen = new Set();
+
+  const add = (value, preferredKind = '', quality = '') => {
+    if (Array.isArray(value)) {
+      value.forEach(item => add(item, preferredKind));
+      return;
+    }
+
+    const direct = candidateUrl(value);
+    if (direct) {
+      if (!seen.has(direct)) {
+        seen.add(direct);
+        candidates.push({
+          url: direct,
+          kind: preferredKind || candidateKind(direct),
+          quality: quality || 'Auto'
+        });
+      }
+      return;
+    }
+
+    if (!value || typeof value !== 'object') return;
+
+    const itemQuality = candidateQuality(value) || quality;
+    if (value.embed) add(value.embed, 'iframe', itemQuality);
+    if (value.stream_url) add(value.stream_url, '', itemQuality);
+    if (value.url) add(value.url, '', itemQuality);
+    if (value.file) add(value.file, '', itemQuality);
+    if (value.src) add(value.src, '', itemQuality);
+    if (value.link) add(value.link, '', itemQuality);
+  };
+
+  add(data?.stream_url);
+  add(data?.streams);
+  add(data?.sources);
+  add(data?.allServers);
+  add(data?.embeds, 'iframe');
+  return candidates;
+}
+
+function fetchWithTimeout(url, timeoutMs = 9000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, {
+    headers: { Accept: 'application/json' },
+    signal: controller.signal
+  }).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Try Anivexa first and return a normalised playback surface.
+ * Anivexa uses AniList IDs, so MAL-only catalogue records intentionally skip
+ * this branch and go straight to the existing MegaPlay fallback.
+ */
+export async function anivexaPlayback(media, episode, language = 'sub') {
+  const anilistId = Number(media?.src === 'anilist' ? media.id : 0);
+  const ep = Number(episode);
+  if (!Number.isInteger(anilistId) || anilistId <= 0 || !Number.isInteger(ep) || ep <= 0) {
+    return null;
+  }
+
+  for (const provider of ANIVEXA_PROVIDER_ORDER) {
+    try {
+      const response = await fetchWithTimeout(
+        anivexaWatchUrl(provider, anilistId, ep, language)
+      );
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      if (data?.error) continue;
+
+      const variants = collectPlaybackCandidates(data);
+      const candidate = variants[0];
+      if (candidate) {
+        return {
+          ...candidate,
+          variants,
+          provider,
+          label: `Anivexa · ${provider}`
+        };
+      }
+    } catch {
+      /* A dead provider must not prevent the next provider or MegaPlay. */
+    }
+  }
+
+  return null;
 }
 
 /**

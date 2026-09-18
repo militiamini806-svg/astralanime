@@ -1,6 +1,6 @@
 /* views.js — rendering only. No fetching happens here except through Api. */
 
-import { GENRES, FORMATS, playbackUrl, releasedEpisodeCount, MAL_CLIENT_ID } from './api.js';
+import { GENRES, FORMATS, releasedEpisodeCount, MAL_CLIENT_ID } from './api.js';
 import { Store, STATUSES } from './store.js';
 import { Auth, authUrl } from './auth.js';
 
@@ -670,14 +670,79 @@ export function episodeGrid(m, current) {
 
 /* ── player ──────────────────────────────────────────────── */
 
-/** In-app episode player. The iframe is the only playback surface. */
-export function playerView(m, episode = 1, language = 'sub') {
+/**
+ * Render the actual playback surface. Anivexa may return either a direct
+ * HLS/MP4 URL or an embed URL, while MegaPlay is always an embed fallback.
+ */
+export function playerSurface(m, episode, playback = null) {
+  const title = Store.titleOf(m);
+  if (playback?.loading) {
+    return `
+      <div class="player-empty player-loading">
+        <div class="player-empty-mark">${svg('play')}</div>
+        <h3>Finding a stream…</h3>
+        <p>Trying Anivexa providers first.</p>
+      </div>`;
+  }
+
+  const src = playback?.url || '';
+  if (src && playback.kind === 'video') {
+    return `<video
+      class="player-video"
+      data-playback-kind="video"
+      src="${esc(src)}"
+      title="${esc(title)} episode ${episode}"
+      controls
+      autoplay
+      playsinline
+      crossorigin="anonymous"></video>`;
+  }
+
+  if (src) {
+    return `<iframe
+      data-playback-kind="iframe"
+      src="${esc(src)}"
+      title="${esc(title)} episode ${episode}"
+      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+      referrerpolicy="strict-origin-when-cross-origin"
+      allowfullscreen></iframe>`;
+  }
+
+  return `<div class="player-empty">
+    <div class="player-empty-mark">${svg('play')}</div>
+    <h3>Episode unavailable</h3>
+    <p>No playable source was returned by Anivexa or MegaPlay.</p>
+  </div>`;
+}
+
+export function playerQualityControl(playback = null) {
+  const variants = Array.isArray(playback?.variants) ? playback.variants : [];
+  if (variants.length < 2) return '';
+
+  const labels = new Map();
+  const options = variants.map((variant, index) => {
+    const base = variant.quality || `Source ${index + 1}`;
+    const seen = (labels.get(base) || 0) + 1;
+    labels.set(base, seen);
+    const label = seen > 1 ? `${base} ${seen}` : base;
+    const selected = variant.url === playback.url ? ' selected' : '';
+    return `<option value="${esc(variant.url)}"${selected}>${esc(label)}</option>`;
+  }).join('');
+
+  return `
+    <label class="player-quality" data-player-quality-wrap>
+      <span>Quality</span>
+      <select data-player-quality aria-label="Video quality">${options}</select>
+    </label>`;
+}
+
+/** In-app episode player with Anivexa loading before the MegaPlay fallback. */
+export function playerView(m, episode = 1, language = 'sub', playback = { loading: true }) {
   const episodes = episodeRows(m);
   const current = episodes.find(e => e.n === Number(episode)) || episodes[0];
   const n = current?.n || Number(episode) || 1;
   const title = Store.titleOf(m);
   const total = episodes.length;
-  const src = total ? playbackUrl(m, n, language) : '';
   const previous = n > 1 ? n - 1 : null;
   const next = n < total ? n + 1 : null;
 
@@ -696,18 +761,20 @@ export function playerView(m, episode = 1, language = 'sub') {
       </div>
       <div class="player-stage">
         <div class="player-frame">
-           ${src ? `<iframe
-               src="${esc(src)}"
-               title="${esc(title)} episode ${n}"
-               allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-               referrerpolicy="strict-origin-when-cross-origin"
-               allowfullscreen></iframe>`
+           ${total
+             ? playerSurface(m, n, playback)
              : `<div class="player-empty"><div class="player-empty-mark">${svg('play')}</div>
-                   <h3>${total ? 'Episode unavailable' : 'No released episodes yet'}</h3>
-                   <p>${total
-                     ? 'This title does not have a playable catalogue ID yet.'
-                     : 'The episode list will appear after an official release.'}</p></div>`}
+                   <h3>No released episodes yet</h3>
+                   <p>The episode list will appear after an official release.</p></div>`}
         </div>
+      </div>
+      <div class="player-servers" data-player-servers role="group" aria-label="Playback servers">
+        <button class="player-server on" data-player-server="anivexa" disabled>
+          <b>Server 1</b><span>Anivexa</span>
+        </button>
+        <button class="player-server" data-player-server="megaplay">
+          <b>Server 2</b><span>MegaPlay</span>
+        </button>
       </div>
        <div class="player-toolbar">
          <button class="player-control${previous ? '' : ' disabled'}" data-player-episode="${previous || ''}" ${previous ? '' : 'disabled'} aria-label="Previous episode">
@@ -725,7 +792,8 @@ export function playerView(m, episode = 1, language = 'sub') {
            <button class="${language === 'sub' ? 'on' : ''}" data-player-language="sub">Sub</button>
            <button class="${language === 'dub' ? 'on' : ''}" data-player-language="dub">Dub</button>
          </div>
-         <span class="player-hint">Choose an episode</span>
+         <div data-player-quality-container>${playerQualityControl(playback)}</div>
+         <span class="player-hint" data-player-hint>Trying Anivexa first…</span>
        </div>
        <div class="player-episodes">
          <div class="player-episodes-head"><b>Episodes</b><span>${total || 0} available</span></div>
@@ -741,6 +809,31 @@ export function playerView(m, episode = 1, language = 'sub') {
 export function sheet(inner) {
   return `<div class="scrim" data-close></div><div class="sheet" role="dialog">
     <div class="sheet-grip"></div>${inner}</div>`;
+}
+
+/* ── update prompt ───────────────────────────────────────── */
+
+export function updateView({ version, notes, downloadUrl, whatsappUrl, force }) {
+  const closeAttr = force ? '' : 'data-close';
+  const dismissBtn = force
+    ? ''
+    : `<button class="opt" data-update-later style="justify-content:center">Not now</button>`;
+  return `
+    <div class="scrim" ${closeAttr}></div>
+    <div class="sheet" role="dialog" aria-label="Update available">
+      <div class="sheet-grip"></div>
+      <h3>Update available</h3>
+      <p>Astralanime ${esc(version || '')} is out. ${force ? 'Update to keep watching.' : 'Grab the newest version for fixes and new features.'}</p>
+      ${notes ? `<p class="t-meta" style="margin:0 0 16px">${esc(notes)}</p>` : ''}
+      <a class="opt" href="${esc(downloadUrl)}" target="_blank" rel="noopener" data-update-download>
+        ${svg('down')}Download the update<em>GitHub</em>
+      </a>
+      ${whatsappUrl ? `
+      <a class="opt" href="${esc(whatsappUrl)}" target="_blank" rel="noopener">
+        ${svg('ext')}Join our WhatsApp channel<em>Updates &amp; news</em>
+      </a>` : ''}
+      ${dismissBtn}
+    </div>`;
 }
 
 export function watchSheet(m) {
