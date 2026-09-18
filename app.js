@@ -1,0 +1,709 @@
+/* app.js — routing, events, orchestration. */
+
+import { Api } from './api.js';
+import { Store } from './store.js';
+import { Auth, authUrl } from './auth.js';
+import * as V from './views.js';
+
+const app = document.getElementById('app');
+const nav = document.getElementById('nav');
+
+let heroTimer = null;
+let heroItems = [];
+let heroIndex = 0;
+let current = null;          // media on the open detail page
+let epLimit = 24;
+let searchState = { q: '', format: null, genre: null, seq: 0 };
+let libTab = 'all';
+let playerState = null;
+
+const ctx = () => ({ source: Store.settings.source, adult: Store.settings.adult });
+
+/* ── toast ───────────────────────────────────────────────── */
+
+let toastTimer;
+function toast(msg) {
+  document.querySelector('.toast')?.remove();
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 2200);
+}
+
+/* ── sheets ──────────────────────────────────────────────── */
+
+function openSheet(html) {
+  closeSheet();
+  const host = document.createElement('div');
+  host.id = 'sheet-host';
+  host.innerHTML = html;
+  document.body.appendChild(host);
+}
+
+function closeSheet() {
+  document.getElementById('sheet-host')?.remove();
+}
+
+/* ── player ──────────────────────────────────────────────── */
+
+function openPlayer(m, episode = null, language = Store.settings.playbackLanguage || 'sub') {
+  closePlayer();
+  const total = V.episodeRows(m).length;
+  const progress = Store.entry(m.src, m.id)?.progress || 0;
+  const chosen = Number(episode) || Math.min(progress + 1, total || 1);
+  playerState = { media: m, episode: Math.max(1, chosen), language };
+  const host = document.createElement('div');
+  host.id = 'player-host';
+  host.innerHTML = V.playerView(m, playerState.episode, playerState.language);
+  document.body.appendChild(host);
+  document.body.style.overflow = 'hidden';
+}
+
+function closePlayer() {
+  /* remove the node so the iframe stops playing */
+  document.getElementById('player-host')?.remove();
+  playerState = null;
+  document.body.style.overflow = '';
+}
+
+function markPlayerEpisode() {
+  if (!playerState) return;
+  const { media, episode } = playerState;
+  if (!Store.isSeen(media.src, media.id, episode)) {
+    Store.toggleSeen(media, episode);
+    syncUp(media);
+  }
+  const button = document.querySelector('[data-player-mark]');
+  if (button) {
+    button.innerHTML = `${V.svg('check')}<span>Watched</span>`;
+    button.classList.add('on');
+  }
+}
+
+/* ── sync ────────────────────────────────────────────────── */
+
+/** Mirror a local change up to AniList when the user is signed in. */
+function syncUp(media) {
+  if (!Auth.signedIn || !Store.settings.syncOnChange) return;
+  const entry = Store.entry(media.src, media.id);
+  if (entry) Auth.push(media, entry);
+}
+
+/* ── hero ────────────────────────────────────────────────── */
+
+function stopHero() { clearInterval(heroTimer); heroTimer = null; }
+
+/* Older WebViews can be missing matchMedia; never let that break a screen. */
+const prefersReducedMotion = () => {
+  try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  catch { return false; }
+};
+
+function showHeroSlide(i) {
+  heroIndex = i;
+  const hero = document.getElementById('hero');
+  if (!hero) return stopHero();
+  hero.querySelectorAll('.hero-slide').forEach((s, n) => s.classList.toggle('on', n === i));
+  hero.querySelectorAll('.hero-dots i').forEach((d, n) => d.classList.toggle('on', n === i));
+  const body = document.getElementById('hero-body');
+  const m = heroItems[i];
+  if (body && m) {
+    body.innerHTML = V.heroBody(m);
+    document.documentElement.style.setProperty('--tint', V.tintOf(m));
+  }
+}
+
+function startHero(items) {
+  heroItems = items.slice(0, 6);
+  const hero = document.getElementById('hero');
+  if (!hero || !heroItems.length) return;
+  hero.innerHTML = V.heroMarkup(heroItems);
+  showHeroSlide(0);
+  stopHero();
+  if (!prefersReducedMotion()) {
+    heroTimer = setInterval(() => showHeroSlide((heroIndex + 1) % heroItems.length), 7000);
+  }
+}
+
+/** Open an external page: the system browser in the APK, a tab on the web. */
+function openExternal(url) {
+  const B = window.Capacitor?.Plugins?.Browser;
+  if (B) B.open({ url, presentationStyle: 'popover' });
+  else window.open(url, '_blank', 'noopener');
+}
+
+/* ── routes ──────────────────────────────────────────────── */
+
+async function renderHome() {
+  stopHero();
+  app.innerHTML = V.homeShell();
+  const c = ctx();
+
+  const jobs = [
+    ['hero',     () => Api.airingNow(c)],
+    ['trending', () => Api.trending(c)],
+    ['top10',    () => Api.topRated({ ...c, perPage: 10 })],
+    ['season',   () => Api.thisSeason(c)],
+    ['popular',  () => Api.mostPopular(c)],
+    ['movies',   () => Api.topMovies(c)],
+    ['upcoming', () => Api.upcoming(c)],
+    ['g1',       () => Api.byGenre('Action', c)],
+    ['g2',       () => Api.byGenre('Slice of Life', c)]
+  ];
+
+  let failed = 0;
+  for (const [id, run] of jobs) {
+    try {
+      const { items } = await run();
+      if (id === 'hero') startHero(items);
+      else V.fillRail(id, items, id === 'top10');
+    } catch (err) {
+      failed++;
+      if (id === 'hero') {
+        document.getElementById('hero')?.remove();
+        app.insertAdjacentHTML('afterbegin', V.empty(
+          'Could not reach the catalogue',
+          err.message + ' Check your connection and pull the screen to try again.',
+          '<button class="btn btn-line" data-retry>Try again</button>'
+        ));
+      } else {
+        document.querySelector(`[data-rail="${id}"]`)?.remove();
+      }
+    }
+  }
+  if (failed && failed < jobs.length) console.warn(failed + ' section(s) unavailable');
+}
+
+function renderSearch() {
+  stopHero();
+  app.innerHTML = V.searchShell(searchState);
+  const input = document.getElementById('q');
+  const results = document.getElementById('results');
+  if (searchState.q) runSearch();
+  else results.innerHTML = V.empty('Find something to watch', 'Search by title, or narrow the list with a genre above.');
+  setTimeout(() => input?.focus(), 60);
+}
+
+let searchTimer;
+function queueSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 320);
+}
+
+async function runSearch() {
+  const results = document.getElementById('results');
+  if (!results) return;
+  const seq = ++searchState.seq;
+  const { q, format, genre } = searchState;
+
+  if (!q.trim() && !genre) {
+    results.innerHTML = V.empty('Find something to watch', 'Search by title, or narrow the list with a genre above.');
+    return;
+  }
+
+  results.innerHTML = `<div class="grid">${Array.from({ length: 9 }, () =>
+    '<div class="card"><div class="skel" style="aspect-ratio:2/3"></div></div>').join('')}</div>`;
+
+  try {
+    const res = q.trim()
+      ? await Api.search(q, { ...ctx(), format, genre })
+      : await Api.byGenre(genre, ctx());
+    if (seq !== searchState.seq) return;
+    results.innerHTML = res.items.length
+      ? V.grid(res.items)
+      : V.empty('No matches', `Nothing came back for “${q || genre}”. Try a shorter title or the other catalogue in Settings.`);
+  } catch (err) {
+    if (seq !== searchState.seq) return;
+    results.innerHTML = V.empty('Search failed', err.message);
+  }
+}
+
+async function renderCategory(title, note, load) {
+  stopHero();
+  app.innerHTML = V.categoryShell(title, note);
+  const results = document.getElementById('category-results');
+  try {
+    const res = await load();
+    results.innerHTML = res.items.length
+      ? V.grid(res.items)
+      : V.empty('Nothing here yet', 'There are no titles to show in this section.');
+  } catch (err) {
+    results.innerHTML = V.empty('Could not load this section', err.message,
+      '<button class="btn btn-line" data-retry>Try again</button>');
+  }
+}
+
+function renderBrowseCategory(kind) {
+  const categories = {
+    completed: ['Completed', 'Finished series and films', c => Api.completed(c)],
+    popular: ['Most Popular', 'The titles people are watching most', c => Api.mostPopular(c)],
+    movies: ['Movies', 'Films worth the evening', c => Api.topMovies(c)],
+    tv: ['TV Series', 'Long-form series and seasonal favourites', c => Api.byFormat('TV', c)],
+    ova: ['OVAs', 'Original video releases', c => Api.byFormat('OVA', c)],
+    ona: ['ONAs', 'Original net releases', c => Api.byFormat('ONA', c)],
+    special: ['Specials', 'Extra episodes and side stories', c => Api.byFormat('SPECIAL', c)]
+  };
+  const item = categories[kind];
+  if (!item) return renderHome();
+  return renderCategory(item[0], item[1], () => item[2](ctx()));
+}
+
+async function renderGenre(name) {
+  const genre = decodeURIComponent(name || '');
+  if (!genre) return renderHome();
+  return renderCategory(genre, 'Browse anime by genre', () => Api.byGenre(genre, ctx()));
+}
+
+function renderLibrary() {
+  stopHero();
+  app.innerHTML = V.libraryShell(libTab);
+  document.getElementById('libbody').innerHTML = V.libraryBody(libTab);
+}
+
+function renderSettings() {
+  stopHero();
+  app.innerHTML = V.settingsView();
+}
+
+async function renderDetail(src, id) {
+  stopHero();
+  epLimit = 24;
+  app.innerHTML = V.detailShell();
+  window.scrollTo(0, 0);
+  try {
+    current = await Api.detail(src, id);
+    if (!current) throw new Error('That title is not in the catalogue.');
+    app.innerHTML = V.detailView(current);
+  } catch (err) {
+    app.innerHTML = `<button class="back" data-back>${V.svg('back')}</button>` +
+      V.empty('Could not load this title', err.message,
+        '<button class="btn btn-line" data-back>Go back</button>');
+  }
+}
+
+function redrawDetail() {
+  if (!current) return;
+  const y = window.scrollY;
+  app.innerHTML = V.detailView(current);
+  if (epLimit > 24) expandEpisodes();
+  window.scrollTo(0, y);
+}
+
+function expandEpisodes() {
+  const host = document.getElementById('episodes');
+  if (!host || !current) return;
+  host.outerHTML = V.episodeList(current, epLimit);
+}
+
+/* ── router ──────────────────────────────────────────────── */
+
+function route() {
+  closeSheet();
+  closePlayer();
+  const hash = location.hash.replace(/^#\/?/, '') || 'home';
+  const parts = hash.split('/');
+
+  if (parts[0] === 'anime' && parts[1] && parts[2]) {
+    setNav(null);
+    return renderDetail(parts[1], parts[2]);
+  }
+
+  current = null;
+  setNav(parts[0]);
+
+  switch (parts[0]) {
+    case 'search':
+      if (parts[1]) searchState = { ...searchState, q: decodeURIComponent(parts[1]), genre: null };
+      return renderSearch();
+    case 'completed':
+    case 'popular':
+    case 'movies':
+    case 'tv':
+    case 'ova':
+    case 'ona':
+    case 'special':
+      return renderBrowseCategory(parts[0]);
+    case 'genre':
+      return renderGenre(parts.slice(1).join('/'));
+    case 'library':  return renderLibrary();
+    case 'settings': return renderSettings();
+    default: return renderHome();
+  }
+}
+
+function setNav(tab) {
+  nav.querySelectorAll('button').forEach(b =>
+    b.setAttribute('aria-current', b.dataset.go === tab ? 'page' : 'false'));
+}
+
+/* ── global events ───────────────────────────────────────── */
+
+document.addEventListener('click', async e => {
+  const t = e.target;
+
+  const navBtn = t.closest('[data-go]');
+  if (navBtn) { location.hash = '#/' + navBtn.dataset.go; return; }
+
+  if (t.closest('[data-back]')) {
+    history.length > 1 ? history.back() : (location.hash = '#/home');
+    return;
+  }
+
+  if (t.closest('[data-retry]')) { route(); return; }
+  if (t.closest('[data-close]')) { closeSheet(); return; }
+  if (t.closest('[data-player-close]')) { closePlayer(); return; }
+
+  if (t.closest('[data-browse]')) {
+    openSheet(V.browseSheet());
+    return;
+  }
+
+  if (t.closest('[data-browse-toggle]')) {
+    const toggle = t.closest('[data-browse-toggle]');
+    const genres = document.getElementById('browse-genres');
+    const open = toggle.getAttribute('aria-expanded') !== 'true';
+    toggle.setAttribute('aria-expanded', String(open));
+    genres?.classList.toggle('collapsed', !open);
+    return;
+  }
+
+  if (t.closest('[data-play-trailer]') && current) {
+    closeSheet();
+    openPlayer(current);
+    return;
+  }
+
+  const playerEpisode = t.closest('[data-player-episode]');
+  if (playerEpisode && playerState) {
+    const n = Number(playerEpisode.dataset.playerEpisode);
+    if (n > 0) openPlayer(playerState.media, n, playerState.language);
+    return;
+  }
+
+  const playerLanguage = t.closest('[data-player-language]');
+  if (playerLanguage && playerState) {
+    Store.set({ playbackLanguage: playerLanguage.dataset.playerLanguage });
+    openPlayer(playerState.media, playerState.episode, playerLanguage.dataset.playerLanguage);
+    return;
+  }
+
+  if (t.closest('[data-player-mark]') && playerState) {
+    markPlayerEpisode();
+    return;
+  }
+
+  if (t.closest('[data-player-fullscreen]')) {
+    const frame = document.querySelector('#player .player-frame');
+    const enter = frame?.requestFullscreen || frame?.webkitRequestFullscreen;
+    if (enter) enter.call(frame);
+    return;
+  }
+
+  /* hero dots */
+  const dot = t.closest('[data-dot]');
+  if (dot) { stopHero(); showHeroSlide(+dot.dataset.dot); return; }
+
+  /* quick track from hero */
+  const qa = t.closest('[data-quickadd]');
+  if (qa) {
+    const [src, id] = qa.dataset.quickadd.split(':');
+    const m = heroItems.find(x => String(x.id) === id);
+    if (m) { Store.save(m, { status: 'planning' }); syncUp(m); toast('Added to Plan to watch'); }
+    return;
+  }
+
+  /* genre chip anywhere */
+  const gchip = t.closest('[data-genre]');
+  if (gchip && gchip.closest('#genres')) {
+    searchState.genre = gchip.dataset.genre || null;
+    searchState.q = document.getElementById('q')?.value || '';
+    document.querySelectorAll('#genres .chip').forEach(c => c.classList.toggle('on', c === gchip));
+    runSearch();
+    return;
+  }
+  if (gchip) { searchState = { q: '', format: null, genre: gchip.dataset.genre, seq: searchState.seq }; location.hash = '#/search'; return; }
+
+  const fchip = t.closest('[data-format]');
+  if (fchip) {
+    searchState.format = fchip.dataset.format || null;
+    document.querySelectorAll('#filters .chip').forEach(c => c.classList.toggle('on', c === fchip));
+    runSearch();
+    return;
+  }
+
+  /* synopsis */
+  if (t.closest('[data-expand]')) {
+    const syn = document.getElementById('syn');
+    syn.classList.remove('clip');
+    t.closest('[data-expand]').remove();
+    return;
+  }
+
+  /* detail actions */
+  if (t.closest('[data-watch]') && current) {
+    openPlayer(current);
+    return;
+  }
+  if (t.closest('[data-track]') && current) { openSheet(V.trackSheet(current)); return; }
+
+  if (t.closest('[data-fav]') && current) {
+    const e2 = Store.toggleFav(current);
+    toast(e2.fav ? 'Added to favourites' : 'Removed from favourites');
+    redrawDetail();
+    return;
+  }
+
+  const site = t.closest('.sheet a.opt');
+  if (site && site.href) {
+    e.preventDefault();
+    closeSheet();
+    openExternal(site.href);
+    return;
+  }
+
+  /* track sheet */
+  const st = t.closest('[data-status]');
+  if (st && current) {
+    Store.save(current, { status: st.dataset.status });
+    syncUp(current);
+    toast('Moved to ' + st.textContent.trim());
+    closeSheet(); redrawDetail();
+    return;
+  }
+
+  const pr = t.closest('[data-prog]');
+  if (pr && current) {
+    const e2 = Store.entry(current.src, current.id);
+    Store.setProgress(current, (e2?.progress || 0) + Number(pr.dataset.prog));
+    syncUp(current);
+    openSheet(V.trackSheet(current));
+    return;
+  }
+
+  const pmax = t.closest('[data-prog-max]');
+  if (pmax && current) {
+    Store.markThrough(current, Number(pmax.dataset.progMax));
+    syncUp(current);
+    toast('Marked as completed');
+    closeSheet(); redrawDetail();
+    return;
+  }
+
+  if (t.closest('[data-untrack]') && current) {
+    Store.remove(current.src, current.id);
+    toast('Removed from library');
+    closeSheet(); redrawDetail();
+    return;
+  }
+
+  /* episodes */
+  const ep = t.closest('[data-ep]');
+  if (ep && current) {
+    const n = Number(ep.dataset.ep);
+    openPlayer(current, n);
+    return;
+  }
+
+  if (t.closest('[data-eps-more]')) { epLimit += 50; expandEpisodes(); return; }
+
+  /* library tabs */
+  const tab = t.closest('[data-tab]');
+  if (tab) {
+    libTab = tab.dataset.tab;
+    document.querySelectorAll('#libtabs button').forEach(b => b.classList.toggle('on', b === tab));
+    document.getElementById('libbody').innerHTML = V.libraryBody(libTab);
+    return;
+  }
+
+  /* settings */
+  const srcBtn = t.closest('[data-source]');
+  if (srcBtn) {
+    Store.set({ source: srcBtn.dataset.source });
+    renderSettings();
+    toast('Now using ' + (srcBtn.dataset.source === 'mal' ? 'MyAnimeList' : 'AniList'));
+    return;
+  }
+
+  const lang = t.closest('[data-lang]');
+  if (lang) { Store.set({ titleLang: lang.dataset.lang }); renderSettings(); return; }
+
+  const playbackLang = t.closest('[data-default-language]');
+  if (playbackLang) {
+    Store.set({ playbackLanguage: playbackLang.dataset.defaultLanguage });
+    renderSettings();
+    return;
+  }
+
+  const tog = t.closest('[data-toggle]');
+  if (tog) {
+    const k = tog.dataset.toggle;
+    Store.set({ [k]: !Store.settings[k] });
+    renderSettings();
+    return;
+  }
+
+  if (t.closest('[data-save-mal]')) {
+    Store.set({ malClientId: document.getElementById('mal-id').value.trim() });
+    toast('Client ID saved on this device');
+    return;
+  }
+
+  if (t.closest('[data-authorise]')) {
+    const id = document.getElementById('al-client').value.trim();
+    if (!id) return toast('Enter your client ID first');
+    Store.set({ anilistClientId: id });
+    openExternal(authUrl(id));
+    toast('Copy the token, then come back');
+    return;
+  }
+
+  if (t.closest('[data-signin]')) {
+    const btn = t.closest('[data-signin]');
+    const token = document.getElementById('al-token').value;
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const u = await Auth.signIn(token);
+      renderSettings();
+      toast('Signed in as ' + u.name);
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Sign in';
+      toast(err.message);
+    }
+    return;
+  }
+
+  if (t.closest('[data-signout]')) {
+    Auth.signOut();
+    renderSettings();
+    toast('Signed out. Your library stays on this device.');
+    return;
+  }
+
+  if (t.closest('[data-pull]')) {
+    const btn = t.closest('[data-pull]');
+    btn.disabled = true; btn.textContent = 'Importing…';
+    try {
+      const n = await Auth.pull();
+      renderSettings();
+      toast(`Imported ${n} ${n === 1 ? 'title' : 'titles'}`);
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Import my AniList list';
+      toast(err.message);
+    }
+    return;
+  }
+
+  if (t.closest('[data-push]')) {
+    const btn = t.closest('[data-push]');
+    btn.disabled = true;
+    try {
+      const r = await Auth.pushAll((done, total) => {
+        btn.textContent = `Uploading ${done} of ${total}…`;
+      });
+      renderSettings();
+      toast(`Uploaded ${r.ok} of ${r.total}`);
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Upload everything on this device';
+      toast(err.message);
+    }
+    return;
+  }
+
+  if (t.closest('[data-export]')) {
+    const blob = new Blob([Store.export()], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `aniva-library-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('Library exported');
+    return;
+  }
+
+  if (t.closest('[data-import]')) { document.getElementById('importfile').click(); return; }
+
+  if (t.closest('[data-wipe]')) {
+    if (confirm('Delete every saved title and episode tick on this device? This cannot be undone.')) {
+      Store.clear();
+      renderSettings();
+      toast('Library deleted');
+    }
+    return;
+  }
+});
+
+document.addEventListener('change', async e => {
+  if (e.target.id === 'importfile' && e.target.files[0]) {
+    try {
+      const n = Store.import(await e.target.files[0].text());
+      renderSettings();
+      toast(`Imported ${n} ${n === 1 ? 'title' : 'titles'}`);
+    } catch (err) {
+      toast(err.message);
+    }
+    e.target.value = '';
+  }
+});
+
+document.addEventListener('input', e => {
+  if (e.target.id === 'q') { searchState.q = e.target.value; queueSearch(); }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('player-host')) closePlayer();
+  else closeSheet();
+});
+
+window.addEventListener('hashchange', route);
+
+/* Playback events are sent by the embedded player. Only trust its origin. */
+window.addEventListener('message', e => {
+  if (!playerState || !['https://megaplay.buzz', 'https://www.megaplay.buzz'].includes(e.origin)) return;
+  let data = e.data;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch { return; }
+  }
+  if (data?.event === 'complete') {
+    markPlayerEpisode();
+    toast('Episode completed');
+  }
+});
+
+/* Android hardware back button, when running inside Capacitor */
+document.addEventListener('deviceready', () => {}, false);
+window.addEventListener('load', () => {
+  if (window.Capacitor?.Plugins?.App) {
+    window.Capacitor.Plugins.App.addListener('backButton', ({ canGoBack }) => {
+      if (document.getElementById('player-host')) return closePlayer();
+      if (document.getElementById('sheet-host')) return closeSheet();
+      if (canGoBack && location.hash && location.hash !== '#/home') history.back();
+      else window.Capacitor.Plugins.App.exitApp();
+    });
+  }
+});
+
+/* keep the library screen live when the store changes elsewhere */
+Store.subscribe(() => {
+  if (location.hash.startsWith('#/library')) {
+    const body = document.getElementById('libbody');
+    if (body) body.innerHTML = V.libraryBody(libTab);
+  }
+});
+
+if (!location.hash) location.hash = '#/home';
+route();
+
+/* drop the splash once the first screen is in the DOM */
+function dropSplash() {
+  const boot = document.getElementById('boot');
+  if (!boot) return;
+  boot.style.transition = 'opacity .25s ease';
+  boot.style.opacity = '0';
+  setTimeout(() => boot.remove(), 260);
+}
+
+if (typeof requestAnimationFrame === 'function') requestAnimationFrame(dropSplash);
+else setTimeout(dropSplash, 0);
