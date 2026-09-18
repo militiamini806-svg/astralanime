@@ -24,7 +24,10 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
@@ -40,7 +43,9 @@ jobs:
 
       - name: Generate Android project
         run: |
-          if [ ! -d android ]; then npx cap add android; fi
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
           npx cap sync android
 
       - name: Install optional launcher resources
@@ -55,15 +60,22 @@ jobs:
         run: |
           python3 - <<'PY'
           import pathlib
-          p = pathlib.Path("android/app/build.gradle")
-          s = p.read_text()
-          s = s.replace("minifyEnabled false", "minifyEnabled true")
-          if "shrinkResources" not in s:
-              s = s.replace(
+
+          path = pathlib.Path("android/app/build.gradle")
+          content = path.read_text()
+
+          content = content.replace(
+              "minifyEnabled false",
+              "minifyEnabled true"
+          )
+
+          if "shrinkResources" not in content:
+              content = content.replace(
                   "minifyEnabled true",
                   "minifyEnabled true\n            shrinkResources true"
               )
-          p.write_text(s)
+
+          path.write_text(content)
           PY
 
       - name: Build debug APK
@@ -90,17 +102,23 @@ jobs:
           fi
 
           echo "$KEYSTORE_B64" | base64 -d > keystore.jks
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 
-          UNSIGNED=android/app/build/outputs/apk/release/app-release-unsigned.apk
-          [ -f "$UNSIGNED" ] || \
-            UNSIGNED=android/app/build/outputs/apk/release/app-release.apk
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 
-          "$BT/zipalign" -p -f 4 \
-            "$UNSIGNED" \
+          UNSIGNED_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+
+          if [ ! -f "$UNSIGNED_APK" ]; then
+            UNSIGNED_APK="android/app/build/outputs/apk/release/app-release.apk"
+          fi
+
+          "$BUILD_TOOLS/zipalign" \
+            -p \
+            -f \
+            4 \
+            "$UNSIGNED_APK" \
             astralanime-release.apk
 
-          "$BT/apksigner" sign \
+          "$BUILD_TOOLS/apksigner" sign \
             --ks keystore.jks \
             --ks-pass pass:"$KEYSTORE_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \
