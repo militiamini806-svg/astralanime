@@ -62,11 +62,14 @@ adult filter, AniList account, MAL client ID, wipe.
 | | endpoint | key |
 |---|---|---|
 | AniList | `https://graphql.anilist.co` | none for reading |
-| MyAnimeList | `https://api.jikan.moe/v4` | none |
+| MyAnimeList | `https://api.myanimelist.net/v2` | Client ID in Settings |
 
-Reading the catalogue needs no credentials at all. A token is only required to
-*write* to a list, which is what signing in is for. Jikan is rate limited to
-about 3 requests a second, so `api.js` queues its calls.
+AniList reading needs no credentials. MyAnimeList API v2 reading uses the
+app's public Client ID by default and sends it in the `X-MAL-CLIENT-ID`
+header; a different Client ID can be entered in Settings. The app falls back
+to AniList if the official MAL request is unavailable. Jikan is kept only as a
+read fallback and is rate limited to about 3 requests a second, so `api.js`
+queues its calls.
 
 ## Signing in to AniList
 

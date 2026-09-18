@@ -317,7 +317,8 @@ function renderSearch() {
   const input = document.getElementById('q');
   const results = document.getElementById('results');
   if (searchState.q) runSearch();
-  else results.innerHTML = V.empty('Find something to watch', 'Search by title, or narrow the list with a genre above.');
+  else if (searchState.genre || searchState.format) runSearch();
+  else results.innerHTML = V.searchPrompt();
   setTimeout(() => input?.focus(), 60);
 }
 
@@ -339,8 +340,8 @@ async function runSearch() {
   const seq = ++searchState.seq;
   const { q, format, genre } = searchState;
 
-  if (!q.trim() && !genre) {
-    results.innerHTML = V.empty('Find something to watch', 'Search by title, or narrow the list with a genre above.');
+  if (!q.trim() && !genre && !format) {
+    results.innerHTML = V.searchPrompt();
     return;
   }
 
@@ -350,11 +351,13 @@ async function runSearch() {
   try {
     const res = q.trim()
       ? await Api.search(q, { ...ctx(), format, genre })
-      : await Api.byGenre(genre, ctx());
+      : genre
+        ? await Api.byGenre(genre, ctx())
+        : await Api.byFormat(format, ctx());
     if (seq !== searchState.seq) return;
     results.innerHTML = res.items.length
       ? V.searchResults(q, res.items)
-      : V.empty('No matches', `Nothing came back for “${q || genre}”. Try a shorter or differently spelled title.`);
+      : V.searchNoResults(q || genre || format);
   } catch (err) {
     if (seq !== searchState.seq) return;
     console.error('Search failed:', err);
@@ -485,6 +488,29 @@ function setNav(tab) {
 
 document.addEventListener('click', async e => {
   const t = e.target;
+
+  const searchSuggestion = t.closest('[data-search-suggest]');
+  if (searchSuggestion) {
+    searchState.q = searchSuggestion.dataset.searchSuggest || '';
+    searchState.format = null;
+    searchState.genre = null;
+    const input = document.getElementById('q');
+    if (input) input.value = searchState.q;
+    document.querySelector('[data-search-clear]')?.removeAttribute('hidden');
+    document.querySelector('[data-search-clear]')?.classList.add('show');
+    runSearch();
+    return;
+  }
+
+  if (t.closest('[data-search-clear]')) {
+    const input = document.getElementById('q');
+    if (input) input.value = '';
+    searchState.q = '';
+    document.querySelector('[data-search-clear]')?.setAttribute('hidden', '');
+    document.querySelector('[data-search-clear]')?.classList.remove('show');
+    runSearch();
+    return;
+  }
 
   const navBtn = t.closest('[data-go]');
   if (navBtn) { location.hash = '#/' + navBtn.dataset.go; return; }
@@ -814,7 +840,15 @@ document.addEventListener('change', async e => {
 });
 
 document.addEventListener('input', e => {
-  if (e.target.id === 'q') { searchState.q = e.target.value; queueSearch(); }
+  if (e.target.id === 'q') {
+    searchState.q = e.target.value;
+    const clear = document.querySelector('[data-search-clear]');
+    if (clear) {
+      clear.hidden = !e.target.value;
+      clear.classList.toggle('show', !!e.target.value);
+    }
+    queueSearch();
+  }
 });
 
 document.addEventListener('keydown', e => {

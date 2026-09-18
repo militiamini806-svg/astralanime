@@ -1,6 +1,6 @@
 /* views.js — rendering only. No fetching happens here except through Api. */
 
-import { GENRES, FORMATS, playbackUrl, releasedEpisodeCount } from './api.js';
+import { GENRES, FORMATS, playbackUrl, releasedEpisodeCount, MAL_CLIENT_ID } from './api.js';
 import { Store, STATUSES } from './store.js';
 import { Auth, authUrl } from './auth.js';
 
@@ -281,24 +281,39 @@ export function heroBody(m) {
 /* ── search ──────────────────────────────────────────────── */
 
 export function searchShell(state) {
+  const q = state.q || '';
   return `
-    <div class="view">
+    <div class="view search-page">
       ${brandBar()}
-      <div class="searchbar">
-        <div>
+      <section class="search-hero">
+        <span class="search-kicker">ANILIST CATALOGUE</span>
+        <h1 class="t-display">Find your next favourite.</h1>
+        <p>Search thousands of anime by title. The closest title match always comes first.</p>
+        <div class="search-input">
           ${svg('search')}
-          <input id="q" type="search" placeholder="Search anime" autocomplete="off"
-                 value="${esc(state.q || '')}" enterkeyhint="search">
+          <input id="q" type="search" placeholder="Search Naruto, One Piece…" autocomplete="off"
+                 value="${esc(q)}" enterkeyhint="search" aria-label="Search anime titles">
+          <button class="search-clear${q ? ' show' : ''}" data-search-clear aria-label="Clear search" ${q ? '' : 'hidden'}>
+            ${svg('close')}
+          </button>
         </div>
-      </div>
-      <div class="filters" id="filters">
-        <button class="chip${!state.format ? ' on' : ''}" data-format="">Any format</button>
-        ${FORMATS.map(f => `<button class="chip${state.format === f.v ? ' on' : ''}" data-format="${f.v}">${esc(f.label)}</button>`).join('')}
-      </div>
-      <div class="filters" id="genres">
-        <button class="chip${!state.genre ? ' on' : ''}" data-genre="">All genres</button>
-        ${GENRES.map(g => `<button class="chip${state.genre === g ? ' on' : ''}" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}
-      </div>
+      </section>
+      <section class="search-filters" aria-label="Search filters">
+        <div class="search-filter-group">
+          <span class="search-filter-label">Format</span>
+          <div class="search-pills" id="filters">
+            <button class="chip${!state.format ? ' on' : ''}" data-format="">Any</button>
+            ${FORMATS.map(f => `<button class="chip${state.format === f.v ? ' on' : ''}" data-format="${f.v}">${esc(f.label)}</button>`).join('')}
+          </div>
+        </div>
+        <div class="search-filter-group">
+          <span class="search-filter-label">Genre</span>
+          <div class="search-pills" id="genres">
+            <button class="chip${!state.genre ? ' on' : ''}" data-genre="">All</button>
+            ${GENRES.map(g => `<button class="chip${state.genre === g ? ' on' : ''}" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}
+          </div>
+        </div>
+      </section>
       <div id="results"></div>
     </div>`;
 }
@@ -337,9 +352,31 @@ export function topResultCard(m) {
 /** Compose a search screen's results: a featured top match for a typed title, the rest as a grid. */
 export function searchResults(q, items) {
   if (!items.length) return '';
-  if (!q || !q.trim()) return grid(items);           // pure genre browse — no single title to feature
+  if (!q || !q.trim()) return `<div class="search-result-head"><span>ANILIST RESULTS</span><b>${items.length} titles</b></div>${grid(items)}`;
   const [top, ...rest] = items;
-  return `${topResultCard(top)}${rest.length ? grid(rest) : ''}`;
+  return `<div class="search-result-head"><span>BEST TITLE MATCH</span><b>${items.length} results</b></div>${topResultCard(top)}${rest.length ? grid(rest) : ''}`;
+}
+
+export function searchPrompt() {
+  return `
+    <div class="search-prompt">
+      <div class="search-prompt-icon">${svg('search')}</div>
+      <h2>Search AniList by title</h2>
+      <p>Start with a title, a short word, or one of these popular searches.</p>
+      <div class="search-suggestions">
+        ${['Naruto', 'One Piece', 'Frieren', 'Demon Slayer'].map(title =>
+          `<button class="suggestion" data-search-suggest="${esc(title)}">${esc(title)}</button>`).join('')}
+      </div>
+    </div>`;
+}
+
+export function searchNoResults(q) {
+  return `
+    <div class="search-prompt search-no-results">
+      <div class="search-prompt-icon">${svg('search')}</div>
+      <h2>No title found</h2>
+      <p>We searched AniList for “${esc(q)}”. Try a shorter title or remove a filter.</p>
+    </div>`;
 }
 
 export const loadingGrid = (n = 8) => `<div class="grid">${Array.from({ length: n }, () => `
@@ -857,14 +894,14 @@ export function settingsView() {
       </section>
 
       <section class="set-group">
-        <h3>MyAnimeList</h3>
-        <p>Paste a client ID to read the catalogue from MyAnimeList's own API.
+        <h3>MyAnimeList API v2</h3>
+        <p>Paste a client ID to read the catalogue from MyAnimeList's official v2 API.
            Make one at myanimelist.net under Settings → API → Create ID, with
            App Type "other" and no redirect URL.
-           ${s.malClientId ? 'In use.' : 'Without one the app falls back to the Jikan mirror, which is slower and rate limited.'}
+           ${(s.malClientId || MAL_CLIENT_ID) ? 'Configured.' : 'Without one the app uses the AniList fallback.'}
            This only works inside the installed app — MyAnimeList blocks it from a browser tab, so it will silently
-           use Jikan there even with a Client ID saved.</p>
-        <input class="field" id="mal-id" type="text" placeholder="Client ID" value="${esc(s.malClientId)}">
+           use the catalogue fallback there even with a Client ID saved.</p>
+        <input class="field" id="mal-id" type="text" placeholder="Client ID" value="${esc(s.malClientId || MAL_CLIENT_ID)}">
         <button class="btn btn-line btn-wide" data-save-mal style="margin-top:10px">Save client ID</button>
       </section>
 
