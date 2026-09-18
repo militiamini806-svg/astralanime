@@ -283,11 +283,13 @@ async function runSearch() {
       : await Api.byGenre(genre, ctx());
     if (seq !== searchState.seq) return;
     results.innerHTML = res.items.length
-      ? V.grid(res.items)
+      ? V.searchResults(q, res.items)
       : V.empty('No matches', `Nothing came back for “${q || genre}”. Try a shorter or differently spelled title.`);
   } catch (err) {
     if (seq !== searchState.seq) return;
-    results.innerHTML = V.empty('Search failed', err.message);
+    console.error('Search failed:', err);
+    results.innerHTML = V.empty('Search failed', err.message || 'Something went wrong reaching AniList.',
+      '<button class="btn btn-line" data-retry>Try again</button>');
   }
 }
 
@@ -740,21 +742,11 @@ document.addEventListener('input', e => {
   if (e.target.id === 'q') { searchState.q = e.target.value; queueSearch(); }
 });
 
-/* `search` fires when the keyboard's search key is pressed and when the box is
-   cleared; Enter covers the desktop case. Both skip the debounce. */
-document.addEventListener('search', e => {
-  if (e.target.id !== 'q') return;
-  clearTimeout(searchTimer);
-  searchState.q = e.target.value;
-  runSearch();
-});
-
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'q') {
     e.preventDefault();
     clearTimeout(searchTimer);
     searchState.q = e.target.value;
-    e.target.blur();
     runSearch();
     return;
   }

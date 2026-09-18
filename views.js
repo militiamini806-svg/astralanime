@@ -304,6 +304,43 @@ export function searchShell(state) {
 
 export const grid = items => `<div class="grid">${items.map(m => card(m)).join('')}</div>`;
 
+/**
+ * The single best match for a typed title, shown large above the grid.
+ * AniList already ranks its search results by relevance (SEARCH_MATCH), so
+ * the first item back from a text search *is* the top match — this just
+ * gives it a home that says so, instead of burying it in the grid.
+ */
+export function topResultCard(m) {
+  if (!m) return '';
+  const t = Store.titleOf(m);
+  const bits = [];
+  if (m.score) bits.push((m.score / 10).toFixed(1) + ' rating');
+  if (fmt(m)) bits.push(fmt(m));
+  if (m.year) bits.push(m.year);
+  if (m.episodes) bits.push(m.episodes + (m.episodes === 1 ? ' ep' : ' eps'));
+  return `
+    <a class="top-result" href="#/anime/${m.src}/${m.id}" style="--tint:${esc(tintOf(m))}">
+      <div class="top-result-art">
+        <img src="${esc(m.cover)}" alt="" loading="lazy" decoding="async">
+      </div>
+      <div class="top-result-body">
+        <span class="top-result-tag">Top match</span>
+        <h3>${esc(t)}</h3>
+        <p class="top-result-meta">${esc(bits.join('  ·  '))}</p>
+        ${m.genres?.length ? `<p class="top-result-genres">${esc(m.genres.slice(0, 3).join('   '))}</p>` : ''}
+        ${m.description ? `<p class="top-result-syn">${esc(m.description.slice(0, 140))}${m.description.length > 140 ? '…' : ''}</p>` : ''}
+      </div>
+    </a>`;
+}
+
+/** Compose a search screen's results: a featured top match for a typed title, the rest as a grid. */
+export function searchResults(q, items) {
+  if (!items.length) return '';
+  if (!q || !q.trim()) return grid(items);           // pure genre browse — no single title to feature
+  const [top, ...rest] = items;
+  return `${topResultCard(top)}${rest.length ? grid(rest) : ''}`;
+}
+
 export const loadingGrid = (n = 8) => `<div class="grid">${Array.from({ length: n }, () => `
   <div class="card"><div class="skel" style="aspect-ratio:2/3"></div>
   <div class="skel" style="height:12px;margin-top:8px"></div></div>`).join('')}</div>`;
@@ -820,7 +857,9 @@ export function settingsView() {
         <p>Paste a client ID to read the catalogue from MyAnimeList's own API.
            Make one at myanimelist.net under Settings → API → Create ID, with
            App Type "other" and no redirect URL.
-           ${s.malClientId ? 'In use.' : 'Without one the app falls back to the Jikan mirror, which is slower and rate limited.'}</p>
+           ${s.malClientId ? 'In use.' : 'Without one the app falls back to the Jikan mirror, which is slower and rate limited.'}
+           This only works inside the installed app — MyAnimeList blocks it from a browser tab, so it will silently
+           use Jikan there even with a Client ID saved.</p>
         <input class="field" id="mal-id" type="text" placeholder="Client ID" value="${esc(s.malClientId)}">
         <button class="btn btn-line btn-wide" data-save-mal style="margin-top:10px">Save client ID</button>
       </section>

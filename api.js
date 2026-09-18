@@ -136,27 +136,19 @@ const MAL_FULL_FIELDS =
 const malClientId = () => (Store.settings.malClientId || '').trim();
 
 /**
- * api.myanimelist.net sends no CORS headers, so a plain browser fetch is
- * refused. Inside the APK, Capacitor's native HTTP bridge makes the request
- * outside the WebView, where CORS does not apply. Use it when it is there and
- * fall back to fetch everywhere else.
+ * api.myanimelist.net sends no CORS headers, so a plain fetch from inside a
+ * WebView tab is refused — that part is unfixable in JS. Capacitor's fix for
+ * exactly this is the "CapacitorHttp" config flag in capacitor.config.json:
+ * once it's `enabled: true` (it now is) and the native project has been
+ * rebuilt, Capacitor transparently rewrites this very `fetch()` call to go
+ * out through native code instead of the WebView, so it is no longer subject
+ * to CORS at all. No plugin object to call by hand, no extra code — the
+ * catch is real, though: this only ever takes effect inside the installed
+ * APK. A browser tab (including `npm run serve`) has no Capacitor runtime,
+ * so this call will always fail there and fall back to Jikan below, which is
+ * expected, not a bug.
  */
 async function httpGetJson(url, headers = {}) {
-  const native = typeof window !== 'undefined' && window.Capacitor?.Plugins?.CapacitorHttp;
-  if (native?.request) {
-    const res = await native.request({
-      url, method: 'GET',
-      headers: { Accept: 'application/json', ...headers },
-      connectTimeout: 20000, readTimeout: 20000
-    });
-    const status = Number(res?.status) || 0;
-    if (status < 200 || status >= 300) {
-      const e = new Error('MyAnimeList refused that request (' + status + ')');
-      e.status = status;
-      throw e;
-    }
-    return typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-  }
   const res = await fetch(url, { headers: { Accept: 'application/json', ...headers } });
   if (!res.ok) {
     const e = new Error('MyAnimeList refused that request (' + res.status + ')');
