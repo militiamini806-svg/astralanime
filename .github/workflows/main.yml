@@ -1,0 +1,121 @@
+name: Build Astralanime APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Prepare web assets
+        run: |
+          mkdir -p www/js www/css www/img
+          cp index.html www/index.html
+          cp api.js app.js auth.js store.js views.js www/js/
+          cp app.css www/css/app.css
+          cp logo.svg www/img/logo.svg
+          cp icon-512.png www/icon-512.png
+
+      - name: Generate Android project
+        run: |
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+
+      - name: Install optional launcher resources
+        run: |
+          if [ -d resources/android ]; then
+            cp -rv resources/android/. android/app/src/main/res/
+          else
+            echo "No optional launcher resources included."
+          fi
+
+      - name: Shrink release build
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("android/app/build.gradle")
+          s = p.read_text()
+          s = s.replace("minifyEnabled false", "minifyEnabled true")
+          if "shrinkResources" not in s:
+              s = s.replace(
+                  "minifyEnabled true",
+                  "minifyEnabled true\n            shrinkResources true"
+              )
+          p.write_text(s)
+          PY
+
+      - name: Build debug APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Build release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Sign release APK
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No signing key configured. Skipping signing."
+            exit 0
+          fi
+
+          echo "$KEYSTORE_B64" | base64 -d > keystore.jks
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+
+          UNSIGNED=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          [ -f "$UNSIGNED" ] || \
+            UNSIGNED=android/app/build/outputs/apk/release/app-release.apk
+
+          "$BT/zipalign" -p -f 4 \
+            "$UNSIGNED" \
+            astralanime-release.apk
+
+          "$BT/apksigner" sign \
+            --ks keystore.jks \
+            --ks-pass pass:"$KEYSTORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass pass:"$KEY_PASSWORD" \
+            astralanime-release.apk
+
+          rm keystore.jks
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: astralanime-apk
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
+            astralanime-release.apk
