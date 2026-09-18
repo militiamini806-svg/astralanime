@@ -593,8 +593,21 @@ function renderSettings() {
 
 async function renderDownloads() {
   stopHero();
-  const Downloads = await loadDownloads();
-  app.innerHTML = V.downloadsView(Downloads.list());
+  window.scrollTo(0, 0);
+  try {
+    const Downloads = await loadDownloads();
+    // The user may have navigated elsewhere while the module loaded.
+    if (currentRouteName() !== 'downloads') return;
+    app.innerHTML = V.downloadsView(Downloads.list());
+  } catch (error) {
+    console.error('Downloads failed to load', error);
+    if (currentRouteName() !== 'downloads') return;
+    app.innerHTML = `<div class="view">${V.empty(
+      'Downloads unavailable',
+      error?.message || 'Could not load downloads.',
+      '<button class="btn btn-line" data-retry>Try again</button>'
+    )}</div>`;
+  }
 }
 
 function offlineMedia(item) {
@@ -738,6 +751,10 @@ function expandEpisodes() {
 
 /* ── router ──────────────────────────────────────────────── */
 
+function currentRouteName() {
+  return (location.hash.replace(/^#\/?/, '') || 'home').split('/')[0];
+}
+
 function route() {
   closeSheet();
   closePlayer();
@@ -766,7 +783,7 @@ function route() {
       return renderBrowseCategory(parts[0]);
     case 'genre':
       return renderGenre(parts.slice(1).join('/'));
-    case 'downloads': return renderDownloads();
+    case 'downloads': return void renderDownloads().catch(console.error);
     case 'library':  return renderLibrary();
     case 'settings': return renderSettings();
     default: return renderHome();
@@ -830,34 +847,48 @@ document.addEventListener('click', async e => {
 
   const offlinePlay = t.closest('[data-offline-play]');
   if (offlinePlay) {
-    const Downloads = await loadDownloads();
-    const item = Downloads.list().find(row =>
-      row.key === offlinePlay.closest('[data-download-key]')?.dataset.downloadKey
-    );
-    if (item) await openOfflineDownload(item);
+    try {
+      const Downloads = await loadDownloads();
+      const item = Downloads.list().find(row =>
+        row.key === offlinePlay.closest('[data-download-key]')?.dataset.downloadKey
+      );
+      if (item) await openOfflineDownload(item);
+    } catch (error) {
+      toast(error.message || 'Could not open download');
+    }
     return;
   }
 
   const downloadDelete = t.closest('[data-download-delete]');
   if (downloadDelete) {
-    const Downloads = await loadDownloads();
+    let Downloads;
+    try { Downloads = await loadDownloads(); }
+    catch (error) { toast(error.message || 'Downloads unavailable'); return; }
     const item = Downloads.list().find(row =>
       row.key === downloadDelete.closest('[data-download-key]')?.dataset.downloadKey
     );
     if (item) {
-      await Downloads.remove(item);
-      renderDownloads();
-      toast('Download deleted');
+      try {
+        await Downloads.remove(item);
+        if (currentRouteName() === 'downloads') renderDownloads();
+        toast('Download deleted');
+      } catch (error) {
+        toast(error.message || 'Could not delete download');
+      }
     }
     return;
   }
 
   if (t.closest('[data-download-clear]')) {
     if (confirm('Delete every downloaded episode from this device?')) {
-      const Downloads = await loadDownloads();
-      await Downloads.clear();
-      renderDownloads();
-      toast('Downloads cleared');
+      try {
+        const Downloads = await loadDownloads();
+        await Downloads.clear();
+        if (currentRouteName() === 'downloads') renderDownloads();
+        toast('Downloads cleared');
+      } catch (error) {
+        toast(error.message || 'Could not clear downloads');
+      }
     }
     return;
   }
