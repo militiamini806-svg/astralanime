@@ -57,6 +57,7 @@ export const ICON = {
   back:   '<path d="M15 5l-7 7 7 7"/>',
   previous: '<path d="m15 18-6-6 6-6"/><path d="M20 18l-6-6 6-6"/>',
   next:    '<path d="m9 18 6-6-6-6"/><path d="m4 18 6-6-6-6"/>',
+  rotate:  '<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/>',
   expand:  '<path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/>',
   info:   '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'
 };
@@ -651,6 +652,9 @@ export function playerView(m, episode = 1, language = 'sub') {
            <b>${esc(title)}</b>
            <span>Episode ${n}${total ? ` of ${total}` : ''}</span>
         </span>
+        <button class="player-rotate" data-player-rotate aria-label="Use landscape" aria-pressed="false" title="Use landscape">
+          ${svg('rotate')}
+        </button>
          <button class="player-fullscreen" data-player-fullscreen aria-label="Fullscreen">${svg('expand')}</button>
       </div>
       <div class="player-stage">

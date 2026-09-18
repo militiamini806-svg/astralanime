@@ -16,6 +16,8 @@ let epLimit = 24;
 let searchState = { q: '', format: null, genre: null, seq: 0 };
 let libTab = 'all';
 let playerState = null;
+let playerLandscape = false;
+let playerRotateFullscreen = false;
 
 const ctx = () => ({ source: Store.settings.source, adult: Store.settings.adult });
 
@@ -63,9 +65,77 @@ function openPlayer(m, episode = null, language = Store.settings.playbackLanguag
 
 function closePlayer() {
   /* remove the node so the iframe stops playing */
+  resetPlayerOrientation();
   document.getElementById('player-host')?.remove();
   playerState = null;
   document.body.style.overflow = '';
+}
+
+function updatePlayerOrientationButton() {
+  const button = document.querySelector('[data-player-rotate]');
+  if (!button) return;
+  button.classList.toggle('on', playerLandscape);
+  button.setAttribute('aria-pressed', String(playerLandscape));
+  const label = playerLandscape ? 'Exit landscape' : 'Use landscape';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
+
+function resetPlayerOrientation() {
+  playerLandscape = false;
+  if (screen.orientation?.unlock) {
+    try { screen.orientation.unlock(); } catch {}
+  }
+  if (playerRotateFullscreen && document.fullscreenElement) {
+    document.exitFullscreen?.().catch(() => {});
+  }
+  playerRotateFullscreen = false;
+}
+
+async function togglePlayerOrientation() {
+  const host = document.getElementById('player-host');
+  if (!host) return;
+
+  if (playerLandscape) {
+    resetPlayerOrientation();
+    host.classList.remove('player-landscape');
+    updatePlayerOrientationButton();
+    return;
+  }
+
+  /*
+   * Android requires fullscreen before allowing a web page to lock its
+   * orientation. The player already covers the screen, so entering fullscreen
+   * here keeps the transition seamless and also hides the system bars.
+   */
+  const requestFullscreen = host.requestFullscreen || host.webkitRequestFullscreen;
+  if (requestFullscreen && !document.fullscreenElement) {
+    try {
+      await requestFullscreen.call(host);
+      playerRotateFullscreen = true;
+    } catch {}
+  }
+
+  let locked = false;
+  if (screen.orientation?.lock) {
+    try {
+      await screen.orientation.lock('landscape');
+      locked = true;
+    } catch {}
+  }
+
+  if (!locked && !screen.orientation?.type?.startsWith('landscape')) {
+    if (playerRotateFullscreen && document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+    playerRotateFullscreen = false;
+    toast('Landscape mode is not available on this device');
+    return;
+  }
+
+  playerLandscape = true;
+  host.classList.add('player-landscape');
+  updatePlayerOrientationButton();
 }
 
 function markPlayerEpisode() {
@@ -464,6 +534,11 @@ document.addEventListener('click', async e => {
 
   if (t.closest('[data-player-mark]') && playerState) {
     markPlayerEpisode();
+    return;
+  }
+
+  if (t.closest('[data-player-rotate]') && playerState) {
+    await togglePlayerOrientation();
     return;
   }
 

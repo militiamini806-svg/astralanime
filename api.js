@@ -201,7 +201,14 @@ async function malPage(path, params, { adult, page = 1, limit = 20, keep = null 
 async function malThenJikan(official, mirror) {
   if (malClientId()) {
     try {
-      return await official();
+      const result = await official();
+      /*
+       * A valid MAL response can still be empty when the endpoint has
+       * rejected a filter or returned a page with no usable records. Do not
+       * leave the catalogue blank in that case; Jikan is the same MAL-backed
+       * catalogue and is the reliable read-only fallback.
+       */
+      if (!result?.items || result.items.length) return result;
     } catch (err) {
       if (err.code !== 'no-client-id') {
         console.warn('MyAnimeList API unavailable, using Jikan:', err.message);
@@ -258,6 +265,7 @@ export async function alRaw(query, variables, token) {
 const F_CARD = `
   id idMal
   title { romaji english native }
+  synonyms
   coverImage { extraLarge large color }
   bannerImage
   averageScore popularity episodes format status season seasonYear genres
@@ -267,7 +275,7 @@ const F_CARD = `
 const F_FULL = `
   ${F_CARD}
   description(asHtml: false)
-  meanScore favourites duration source(version: 3) synonyms countryOfOrigin
+  meanScore favourites duration source(version: 3) countryOfOrigin
   startDate { year month day } endDate { year month day }
   studios(isMain: true) { nodes { id name } }
   trailer { id site thumbnail }
@@ -310,6 +318,7 @@ function fromAniList(m) {
       english: m.title?.english || '',
       native: m.title?.native || ''
     },
+    synonyms: m.synonyms || [],
     cover: m.coverImage?.extraLarge || m.coverImage?.large || '',
     banner: m.bannerImage || m.coverImage?.extraLarge || '',
     color: m.coverImage?.color || null,
@@ -486,6 +495,47 @@ function fromMal(m) {
   };
 }
 
+/* Keep title matching predictable even when a provider's relevance ordering
+ * changes. Exact and prefix matches always appear before loose matches. */
+function searchKey(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\s\-_:/.!,?'"()[\]{}]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function titleVariants(media) {
+  return [
+    media?.title?.english,
+    media?.title?.romaji,
+    media?.title?.native,
+    ...(media?.synonyms || [])
+  ].map(searchKey).filter(Boolean);
+}
+
+function sortSearchResults(items, query) {
+  const needle = searchKey(query);
+  if (!needle) return items;
+
+  return items
+    .map((item, index) => {
+      const variants = titleVariants(item);
+      const rank = variants.reduce((best, title) => {
+        const words = title.split(' ');
+        const score = title === needle ? 0
+          : title.startsWith(needle) ? 1
+          : words.some(word => word.startsWith(needle)) ? 2
+          : title.includes(needle) ? 3 : 4;
+        return Math.min(best, score);
+      }, 4);
+      return { item, index, rank };
+    })
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(row => row.item);
+}
+
 /* ── seasons ─────────────────────────────────────────────── */
 
 function currentSeason(d = new Date()) {
@@ -656,13 +706,51 @@ export const Api = {
     return alPage({ page, sort: ['POPULARITY_DESC'], genre, isAdult: adult ? undefined : false });
   },
 
-  /**
-   * Title search. Always AniList, regardless of which catalogue is selected
-   * for browsing — its search is fast, has no rate limit, and needs no
-   * client ID, so there is no reason to route a search box through MAL.
-   */
-  async search(q, { adult, page = 1, format = null, genre = null }) {
-    if (!q || !q.trim()) return { items: [], hasNext: false, page };
+  /** Search the active catalogue and put the best title match first. */
+  async search(q, { source = 'anilist', adult, page = 1, format = null, genre = null }) {
+    const query = String(q || '').trim();
+    if (!query) return { items: [], hasNext: false, page };
+
+    if (source === 'mal') {
+      return malThenJikan(
+        () => malPage('/anime', {
+          q: query,
+          sort: 'anime_num_list_users'
+        }, {
+          adult,
+          page,
+          limit: 20,
+          keep: n => {
+            const formatOk = !format || MAL_FORMAT[n.media_type] === format;
+            const genreOk = !genre || (n.genres || []).some(g => g.name === genre);
+            return formatOk && genreOk;
+          }
+        }).then(result => ({
+          ...result,
+          items: sortSearchResults(result.items, query)
+        })),
+        async () => {
+          const params = new URLSearchParams({
+            q: query,
+            order_by: 'score',
+            sort: 'desc',
+            limit: '25',
+            sfw: adult ? 'false' : 'true',
+            page: String(page)
+          });
+          const d = await jikan(`/anime?${params}`);
+          let items = d.map(fromJikan).filter(Boolean);
+          if (format) items = items.filter(m => m.format === format);
+          if (genre) items = items.filter(m => m.genres?.includes(genre));
+          return {
+            items: sortSearchResults(items, query),
+            hasNext: d.length === 25,
+            page
+          };
+        }
+      );
+    }
+
     const Q = `
       query ($q:String,$page:Int,$format:MediaFormat,$genre:String,$isAdult:Boolean){
         Page(page:$page, perPage:20){
@@ -671,9 +759,10 @@ export const Api = {
                 format:$format, genre:$genre, isAdult:$isAdult){ ${F_CARD} }
         }
       }`;
-    const d = await anilist(Q, { q: q.trim(), page, format, genre, isAdult: adult ? undefined : false });
+    const d = await anilist(Q, { q: query, page, format, genre, isAdult: adult ? undefined : false });
+    const items = (d?.Page?.media || []).map(fromAniList).filter(Boolean);
     return {
-      items: (d?.Page?.media || []).map(fromAniList).filter(Boolean),
+      items: sortSearchResults(items, query),
       hasNext: !!d?.Page?.pageInfo?.hasNextPage,
       page
     };
