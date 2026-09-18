@@ -3,11 +3,22 @@
 import { Api, anivexaPlayback, playbackUrl } from './api.js';
 import { Store } from './store.js';
 import { Auth, authUrl } from './auth.js';
-import { Downloads } from './downloads.js';
 import * as V from './views.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
+
+// downloads.js pulls in the native Filesystem/FileTransfer modules, so it is
+// loaded on demand instead of during the first app load.
+let downloadsModule = null;
+function loadDownloads() {
+  if (!downloadsModule) {
+    downloadsModule = import('./downloads.js')
+      .then(m => m.Downloads)
+      .catch(error => { downloadsModule = null; throw error; });
+  }
+  return downloadsModule;
+}
 
 let heroTimer = null;
 let heroItems = [];
@@ -580,8 +591,9 @@ function renderSettings() {
   app.innerHTML = V.settingsView();
 }
 
-function renderDownloads() {
+async function renderDownloads() {
   stopHero();
+  const Downloads = await loadDownloads();
   app.innerHTML = V.downloadsView(Downloads.list());
 }
 
@@ -619,6 +631,7 @@ function offlineMedia(item) {
 
 async function openOfflineDownload(item) {
   try {
+    const Downloads = await loadDownloads();
     const url = await Downloads.uri(item);
     if (!url) throw new Error('The saved file path is unavailable');
     openPlayer(
@@ -673,6 +686,7 @@ async function downloadPlayerVariant(variant, button) {
   }
 
   try {
+    const Downloads = await loadDownloads();
     await Downloads.download(meta, progress => {
       if (button) {
         const percent = Math.round(progress * 100);
@@ -816,6 +830,7 @@ document.addEventListener('click', async e => {
 
   const offlinePlay = t.closest('[data-offline-play]');
   if (offlinePlay) {
+    const Downloads = await loadDownloads();
     const item = Downloads.list().find(row =>
       row.key === offlinePlay.closest('[data-download-key]')?.dataset.downloadKey
     );
@@ -825,6 +840,7 @@ document.addEventListener('click', async e => {
 
   const downloadDelete = t.closest('[data-download-delete]');
   if (downloadDelete) {
+    const Downloads = await loadDownloads();
     const item = Downloads.list().find(row =>
       row.key === downloadDelete.closest('[data-download-key]')?.dataset.downloadKey
     );
@@ -838,6 +854,7 @@ document.addEventListener('click', async e => {
 
   if (t.closest('[data-download-clear]')) {
     if (confirm('Delete every downloaded episode from this device?')) {
+      const Downloads = await loadDownloads();
       await Downloads.clear();
       renderDownloads();
       toast('Downloads cleared');
