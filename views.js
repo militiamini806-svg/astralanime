@@ -1,6 +1,6 @@
 /* views.js — rendering only. No fetching happens here except through Api. */
 
-import { GENRES, FORMATS, playbackUrl } from './api.js';
+import { GENRES, FORMATS, playbackUrl, releasedEpisodeCount } from './api.js';
 import { Store, STATUSES } from './store.js';
 import { Auth, authUrl } from './auth.js';
 
@@ -210,13 +210,16 @@ export function heroBody(m) {
   const next = m.nextEp
     ? `Episode ${m.nextEp.n} in ${countdown(m.nextEp.inSec)}`
     : 'Airing now';
+  const tracked = Store.entry(m.src, m.id);
   return `
     <span class="airing-tag"><i class="pulse"></i>${esc(next)}</span>
     <h2 class="t-display">${esc(Store.titleOf(m))}</h2>
     <p class="hero-genres">${esc(m.genres.slice(0, 3).join('   '))}</p>
     <div class="hero-actions">
       <a class="btn btn-solid" href="#/anime/${m.src}/${m.id}">${svg('play')} Open</a>
-      <button class="btn btn-ghost" data-quickadd="${m.src}:${m.id}">${svg('plus')} Track</button>
+      <button class="btn btn-ghost${tracked ? ' tracked' : ''}" data-quickadd="${m.src}:${m.id}">
+        ${svg(tracked ? 'check' : 'plus')} ${tracked ? 'Tracked' : 'Track'}
+      </button>
     </div>`;
 }
 
@@ -400,7 +403,9 @@ export function detailView(m) {
 
       <div class="d-actions">
          <button class="btn btn-tint" data-watch>${svg('play')} Play</button>
-        <button class="btn btn-line" data-track>${svg(e ? 'check' : 'plus')} ${esc(statusLabel)}</button>
+        <button class="btn btn-line${e ? ' tracked' : ''}" data-track>
+          ${svg(e ? 'check' : 'plus')} ${esc(e ? 'Tracked' : statusLabel)}
+        </button>
         <button class="btn btn-line btn-icon" data-fav aria-label="Favourite"
                 style="${e && e.fav ? `color:${esc(tint)}` : ''}">${svg('heart')}</button>
       </div>
@@ -510,9 +515,7 @@ export function episodeList(m, limit = 24) {
 }
 
 export function episodeCount(m) {
-  const known = (m?.streamEpisodes || []).map(e => Number(e.n)).filter(Number.isInteger);
-  return Math.max(Number(m?.episodes) || 0, known.length ? Math.max(...known) : 0,
-    m?.format === 'MOVIE' ? 1 : 0);
+  return releasedEpisodeCount(m);
 }
 
 export function episodeRows(m) {
@@ -531,9 +534,9 @@ export function playerView(m, episode = 1, language = 'sub') {
   const episodes = episodeRows(m);
   const current = episodes.find(e => e.n === Number(episode)) || episodes[0];
   const n = current?.n || Number(episode) || 1;
-  const src = playbackUrl(m, n, language);
   const title = Store.titleOf(m);
   const total = episodes.length;
+  const src = total ? playbackUrl(m, n, language) : '';
   const previous = n > 1 ? n - 1 : null;
   const next = n < total ? n + 1 : null;
 
@@ -556,8 +559,10 @@ export function playerView(m, episode = 1, language = 'sub') {
                referrerpolicy="strict-origin-when-cross-origin"
                allowfullscreen></iframe>`
              : `<div class="player-empty"><div class="player-empty-mark">${svg('play')}</div>
-                  <h3>Episode unavailable</h3>
-                  <p>This title does not have a playable catalogue ID yet.</p></div>`}
+                   <h3>${total ? 'Episode unavailable' : 'No released episodes yet'}</h3>
+                   <p>${total
+                     ? 'This title does not have a playable catalogue ID yet.'
+                     : 'The episode list will appear after an official release.'}</p></div>`}
         </div>
       </div>
        <div class="player-toolbar">
@@ -620,21 +625,21 @@ export function watchSheet(m) {
 
 export function trackSheet(m) {
   const e = Store.entry(m.src, m.id);
-  const max = m.episodes || 9999;
+  const max = releasedEpisodeCount(m);
   return sheet(`
     <h3>${esc(Store.titleOf(m))}</h3>
     <p>${e ? 'On your shelf' : 'Add to your shelf'}</p>
     ${STATUSES.map(s => `
       <button class="opt${e && e.status === s.v ? ' on' : ''}" data-status="${s.v}">
-        ${esc(s.label)}
+        ${e && e.status === s.v ? svg('check') : ''}${esc(s.label)}
       </button>`).join('')}
     <div class="row" style="border:0">
-      <div class="row-b"><b>Progress</b><span>${esc(m.episodes ? `of ${m.episodes} episodes` : 'episodes watched')}</span></div>
+      <div class="row-b"><b>Progress</b><span>${esc(max ? `of ${max} released episodes` : 'released episodes watched')}</span></div>
       <button class="btn btn-line" data-prog="-1" style="width:42px;padding:0">−</button>
       <em style="min-width:34px;text-align:center;font-size:16px;color:var(--paper)">${e?.progress || 0}</em>
       <button class="btn btn-line" data-prog="1" style="width:42px;padding:0">+</button>
     </div>
-    ${m.episodes ? `<button class="opt" data-prog-max="${max}">Mark all ${m.episodes} as watched</button>` : ''}
+    ${max ? `<button class="opt" data-prog-max="${max}">Mark all ${max} released episodes as watched</button>` : ''}
     ${e ? `<button class="opt" data-untrack style="color:var(--accent)">Remove from library</button>` : ''}
   `);
 }
@@ -769,6 +774,9 @@ export function settingsView() {
         <p>Astralanime is a discovery and tracking app. Metadata comes from AniList and MyAnimeList; playback points at the services that license each show.</p>
       </section>
 
+      <p style="text-align:center;color:var(--muted);font-size:12px;margin:24px 0 0">
+        This app is owned by “Sukuna &amp; Akaza lol”.
+      </p>
       <div style="height:20px"></div>
     </div>`;
 }

@@ -278,6 +278,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 .btn-line { border: 1px solid var(--line); background: var(--ink-2); }
+.btn-line.tracked,
+.btn-ghost.tracked { color: var(--tint); border-color: var(--tint); }
 .btn-wide { width: 100%; }
 
 /* ── rails ────────────────────────────────────────────────── */

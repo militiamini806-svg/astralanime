@@ -410,7 +410,12 @@ document.addEventListener('click', async e => {
   if (qa) {
     const [src, id] = qa.dataset.quickadd.split(':');
     const m = heroItems.find(x => String(x.id) === id);
-    if (m) { Store.save(m, { status: 'planning' }); syncUp(m); toast('Added to Plan to watch'); }
+    if (m) {
+      Store.save(m, { status: 'planning' });
+      syncUp(m);
+      showHeroSlide(heroIndex);
+      toast('Added to Plan to watch');
+    }
     return;
   }
 

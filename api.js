@@ -33,6 +33,41 @@ export function playbackUrl(media, episode, language = 'sub') {
   return `${PLAYBACK_BASE}/stream/${route}/${id}/${ep}/${audio}`;
 }
 
+/**
+ * Return the number of episodes that have officially been released.
+ * AniList gives us the next airing episode, while Jikan and AniList can
+ * provide an already released episode list. Never expose the catalogue's
+ * planned total for an airing title when that total includes future episodes.
+ */
+export function releasedEpisodeCount(media) {
+  const total = Number(media?.episodes);
+  const known = (media?.streamEpisodes || [])
+    .map(e => Number(e.n))
+    .filter(Number.isInteger)
+    .reduce((max, n) => Math.max(max, n), 0);
+
+  if (media?.status === 'NOT_YET_RELEASED') return 0;
+
+  if (Number(media?.nextEp?.n) > 0) {
+    const next = Number(media.nextEp.n);
+    return Math.max(0, Math.min(next - 1, Number.isInteger(total) ? total : next - 1));
+  }
+
+  if (media?.status === 'RELEASING') {
+    return known ? Math.min(known, Number.isInteger(total) ? total : known) : 0;
+  }
+
+  if (media?.status === 'FINISHED') {
+    return Math.max(known, Number.isInteger(total) ? total : 0);
+  }
+
+  if (media?.status === 'CANCELLED' || media?.status === 'HIATUS') {
+    return known || (Number.isInteger(total) ? total : 0);
+  }
+
+  return known || (media?.format === 'MOVIE' ? 1 : (Number.isInteger(total) ? total : 0));
+}
+
 /* ── tiny request plumbing ───────────────────────────────── */
 
 const memo = new Map();
