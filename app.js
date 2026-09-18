@@ -3,6 +3,7 @@
 import { Api, anivexaPlayback, playbackUrl } from './api.js';
 import { Store } from './store.js';
 import { Auth, authUrl } from './auth.js';
+import { Downloads } from './downloads.js';
 import * as V from './views.js';
 
 const app = document.getElementById('app');
@@ -105,25 +106,44 @@ function closeSheet() {
 
 /* ── player ──────────────────────────────────────────────── */
 
-function openPlayer(m, episode = null, language = Store.settings.playbackLanguage || 'sub') {
+function openPlayer(
+  m,
+  episode = null,
+  language = Store.settings.playbackLanguage || 'sub',
+  options = {}
+) {
   closePlayer();
   const total = V.episodeRows(m).length;
   const progress = Store.entry(m.src, m.id)?.progress || 0;
   const chosen = Number(episode) || Math.min(progress + 1, total || 1);
+  const offline = Boolean(options.offline);
+  const initialPlayback = options.playback || null;
   playerState = {
     media: m,
     episode: Math.max(1, chosen),
     language,
     playbackRequest: 0,
-    anivexaPlayback: null
+    anivexaPlayback: null,
+    offline,
+    playback: initialPlayback
   };
   const state = playerState;
   const host = document.createElement('div');
   host.id = 'player-host';
-  host.innerHTML = V.playerView(m, state.episode, state.language);
+  host.innerHTML = V.playerView(
+    m,
+    state.episode,
+    state.language,
+    initialPlayback || { loading: true },
+    offline
+  );
   document.body.appendChild(host);
   document.body.style.overflow = 'hidden';
-  loadPlayerPlayback(state);
+  if (initialPlayback) {
+    renderPlayerPlayback(state, initialPlayback, 'Saved on this device');
+  } else {
+    loadPlayerPlayback(state);
+  }
 }
 
 function closePlayer() {
@@ -160,6 +180,8 @@ function renderPlayerPlayback(state, playback, hint) {
   frame.innerHTML = V.playerSurface(state.media, state.episode, playback);
   const quality = document.querySelector('[data-player-quality-container]');
   if (quality) quality.innerHTML = V.playerQualityControl(playback);
+  const downloads = document.querySelector('[data-player-download-container]');
+  if (downloads) downloads.innerHTML = V.playerDownloadControl(playback);
   setPlayerHint(hint);
   updatePlayerServers(state);
 
@@ -167,6 +189,10 @@ function renderPlayerPlayback(state, playback, hint) {
   if (video) {
     video.addEventListener('error', () => {
       if (playerState !== state) return;
+      if (state.offline) {
+        setPlayerHint('The saved file could not be opened');
+        return;
+      }
       renderMegaPlayFallback(state, 'Anivexa playback failed · MegaPlay fallback');
     }, { once: true });
     video.play?.().catch(() => {});
@@ -554,6 +580,118 @@ function renderSettings() {
   app.innerHTML = V.settingsView();
 }
 
+function renderDownloads() {
+  stopHero();
+  app.innerHTML = V.downloadsView(Downloads.list());
+}
+
+function offlineMedia(item) {
+  const title = item.title || 'Downloaded episode';
+  const total = Number(item.totalEpisodes) || Number(item.episode) || 1;
+  return {
+    src: item.src || 'anilist',
+    id: item.id,
+    malId: item.malId || null,
+    title: { romaji: title, english: title, native: title },
+    cover: item.cover || '',
+    banner: item.cover || '',
+    color: item.color || null,
+    description: '',
+    episodes: total,
+    duration: null,
+    format: 'TV',
+    status: 'FINISHED',
+    season: null,
+    year: null,
+    genres: [],
+    studios: [],
+    trailer: null,
+    nextEp: null,
+    links: [],
+    otherLinks: [],
+    streamEpisodes: Array.from({ length: total }, (_, index) => ({ n: index + 1 })),
+    tags: [],
+    characters: [],
+    relations: [],
+    recommendations: []
+  };
+}
+
+async function openOfflineDownload(item) {
+  try {
+    const url = await Downloads.uri(item);
+    if (!url) throw new Error('The saved file path is unavailable');
+    openPlayer(
+      offlineMedia(item),
+      item.episode,
+      item.language,
+      {
+        offline: true,
+        playback: {
+          kind: 'video',
+          url,
+          provider: 'offline',
+          label: 'Offline',
+          quality: item.quality || `Quality ${Number(item.source) + 1}`,
+          variants: []
+        }
+      }
+    );
+  } catch (error) {
+    toast(error.message || 'Could not open this download');
+  }
+}
+
+async function downloadPlayerVariant(variant, button) {
+  if (!playerState || !variant?.downloadUrl) {
+    toast('This source cannot be downloaded');
+    return;
+  }
+
+  const media = playerState.media;
+  const title = Store.titleOf(media);
+  const meta = {
+    url: variant.downloadUrl,
+    src: media.src,
+    id: media.id,
+    malId: media.malId || null,
+    title,
+    cover: media.cover || '',
+    color: media.color || null,
+    episode: playerState.episode,
+    language: playerState.language,
+    source: variant.downloadIndex,
+    quality: variant.quality || `Quality ${Number(variant.downloadIndex) + 1}`,
+    provider: playerState.playback?.provider || 'anivexa',
+    totalEpisodes: V.episodeRows(media).length
+  };
+
+  if (button) {
+    button.disabled = true;
+    button.classList.add('is-downloading');
+    button.querySelector('span')?.replaceChildren(document.createTextNode('0%'));
+  }
+
+  try {
+    await Downloads.download(meta, progress => {
+      if (button) {
+        const percent = Math.round(progress * 100);
+        button.querySelector('span')?.replaceChildren(document.createTextNode(`${percent}%`));
+      }
+    });
+    toast(`Saved ${title} episode ${playerState.episode} offline`);
+  } catch (error) {
+    toast(error.message || 'Download failed');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove('is-downloading');
+      const label = variant.quality || `Quality ${Number(variant.downloadIndex) + 1}`;
+      button.querySelector('span')?.replaceChildren(document.createTextNode(label));
+    }
+  }
+}
+
 async function renderDetail(src, id) {
   stopHero();
   epLimit = 24;
@@ -614,6 +752,7 @@ function route() {
       return renderBrowseCategory(parts[0]);
     case 'genre':
       return renderGenre(parts.slice(1).join('/'));
+    case 'downloads': return renderDownloads();
     case 'library':  return renderLibrary();
     case 'settings': return renderSettings();
     default: return renderHome();
@@ -664,6 +803,47 @@ document.addEventListener('click', async e => {
   if (t.closest('[data-retry]')) { route(); return; }
   if (t.closest('[data-close]')) { closeSheet(); return; }
   if (t.closest('[data-player-close]')) { closePlayer(); return; }
+
+  const playerDownload = t.closest('[data-player-download]');
+  if (playerDownload && playerState) {
+    const source = playerState.playback;
+    const variant = source?.variants?.find(
+      item => String(item.downloadIndex) === String(playerDownload.dataset.playerDownload)
+    );
+    await downloadPlayerVariant(variant, playerDownload);
+    return;
+  }
+
+  const offlinePlay = t.closest('[data-offline-play]');
+  if (offlinePlay) {
+    const item = Downloads.list().find(row =>
+      row.key === offlinePlay.closest('[data-download-key]')?.dataset.downloadKey
+    );
+    if (item) await openOfflineDownload(item);
+    return;
+  }
+
+  const downloadDelete = t.closest('[data-download-delete]');
+  if (downloadDelete) {
+    const item = Downloads.list().find(row =>
+      row.key === downloadDelete.closest('[data-download-key]')?.dataset.downloadKey
+    );
+    if (item) {
+      await Downloads.remove(item);
+      renderDownloads();
+      toast('Download deleted');
+    }
+    return;
+  }
+
+  if (t.closest('[data-download-clear]')) {
+    if (confirm('Delete every downloaded episode from this device?')) {
+      await Downloads.clear();
+      renderDownloads();
+      toast('Downloads cleared');
+    }
+    return;
+  }
 
   if (t.closest('[data-update-later]')) {
     if (pendingUpdate) Store.set({ updateSkippedVersion: pendingUpdate.version });

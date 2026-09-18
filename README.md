@@ -97,13 +97,27 @@ reanime → anikoto → animegg → aniwaves → mkissa → 2dhive → anizone �
 ```
 
 When Anivexa returns multiple variants, the player shows a quality selector
-and lets the viewer switch without leaving the episode. Direct HLS/MP4
-results use the in-app video element. Embed results use the in-app iframe. If
-direct playback fails, MegaPlay is loaded automatically.
+and lets the viewer switch without leaving the episode. Embed results are
+preferred when supplied because they work reliably in Chrome and Android
+WebView. Direct MP4/WebM results use the in-app video element; raw HLS
+`.m3u8` results are kept as a fallback when no embed is available. If an
+Anivexa source cannot be used, MegaPlay is loaded automatically.
 
 The player also exposes two manual server buttons: **Server 1 — Anivexa** and
 **Server 2 — MegaPlay**. Anivexa is selected by default when it has a source,
 but the viewer can switch to MegaPlay manually.
+
+## Offline downloads
+
+The APK shows a download button for every direct video quality returned by
+Anivexa. Downloads are converted to MP4 by the Node/Railway backend and saved
+in the Android app's private data directory. The **Downloads** tab lists saved
+episodes, opens them without a network connection, and provides delete and
+clear-all controls.
+
+Embed-only servers do not show a download button because an iframe is not a
+downloadable file. The backend must be deployed with FFmpeg; see
+`BACKEND_DOWNLOAD_SETUP.md` in the backend package.
 
 ## Signing in to AniList
 

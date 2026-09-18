@@ -125,7 +125,7 @@ a { color: inherit; text-decoration: none; }
   height: calc(var(--nav-h) + var(--safe-b));
   padding-bottom: var(--safe-b);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   align-items: center;
   background: rgba(5, 5, 10, 0.88);
   backdrop-filter: blur(18px) saturate(1.3);
@@ -1423,6 +1423,49 @@ a { color: inherit; text-decoration: none; }
   font: inherit;
 }
 
+.player-downloads {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.player-downloads > span,
+.download-note {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.download-quality {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: var(--paper);
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.download-quality:disabled { opacity: .55; }
+.download-quality.is-downloading { color: var(--tint); border-color: var(--tint); }
+.download-quality svg { width: 14px; height: 14px; }
+
+.player-offline-badge {
+  margin: 0 var(--gut) 12px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  color: var(--tint);
+  background: rgba(232, 16, 47, .1);
+  border: 1px solid rgba(232, 16, 47, .28);
+  font-size: 12px;
+  text-align: center;
+}
+
 .player-episodes {
   flex: none;
   padding: 0 var(--gut) calc(22px + var(--safe-b));
@@ -1468,6 +1511,81 @@ a { color: inherit; text-decoration: none; }
 .player-episode.seen:not(.on) { color: var(--tint); border-color: rgba(232,16,47,.45); }
 .player-episode svg { position: absolute; right: 4px; top: 4px; width: 10px; height: 10px; }
 .player-no-episodes { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+/* ── offline downloads ─────────────────────────────────────── */
+
+.downloads-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.downloads-head .btn { flex: none; }
+
+.downloads-list {
+  display: grid;
+  gap: 10px;
+  padding: 0 var(--gut) calc(26px + var(--nav-h) + var(--safe-b));
+}
+
+.download-item {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--ink-2);
+}
+
+.download-item > img {
+  width: 66px;
+  height: 94px;
+  flex: none;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  background: var(--ink-3);
+}
+
+.download-item-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.download-item-body > b {
+  width: 100%;
+  overflow: hidden;
+  color: var(--paper);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-item-body > span {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.download-item-body .download-ready { color: #79d99b; }
+.download-item-body progress { width: 100%; height: 6px; accent-color: var(--tint); }
+
+.download-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: auto;
+}
+
+.download-item-actions .btn {
+  min-height: 32px;
+  padding: 7px 11px;
+  font-size: 11.5px;
+}
 
 /* Keep the video at a usable 16:9 size after the landscape lock. */
 @media (orientation: landscape) and (max-height: 620px) {

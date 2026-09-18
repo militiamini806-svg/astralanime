@@ -13,8 +13,25 @@ The player now tries the Anivexa API before MegaPlay:
 9. KickassAnime
 
 If Anivexa returns multiple stream qualities, the player shows a quality
-selector. If Anivexa cannot be reached, a provider returns no playable URL,
-or a direct video fails to load, the existing MegaPlay iframe is used.
+selector. When a provider returns both an embed and a direct HLS stream, the
+embed is selected first because it works reliably in Chrome and Android
+WebView. Direct MP4/WebM sources can still play in the in-app video element.
+If Anivexa cannot be reached, a provider returns no playable URL, or no
+usable Anivexa source is available, the existing MegaPlay iframe is used.
+
+## Offline downloads
+
+The APK adds a download control for each direct Anivexa video variant. It
+calls:
+
+```text
+/download/:provider/:anilistId/sub|dub/:provider-:episode?source=0
+```
+
+The Node/Railway backend converts the selected direct HLS, MP4, or WebM source
+to an MP4 file with FFmpeg. Embed-only sources remain playback-only. Deploy
+the backend with the included `nixpacks.toml`, then build the APK so its
+`DEFAULT_ANIVEXA_API_BASE` points at that Railway domain.
 
 The player also includes two manual server buttons:
 

@@ -59,6 +59,7 @@ export const ICON = {
   next:    '<path d="m9 18 6-6-6-6"/><path d="m4 18 6-6-6-6"/>',
   rotate:  '<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/>',
   expand:  '<path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 20h14"/>',
   info:   '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'
 };
 
@@ -480,6 +481,47 @@ export function libraryBody(tab) {
   return `<div class="grid">${cards.join('')}</div>`;
 }
 
+export function downloadsView(items = []) {
+  return `
+    <div class="view">
+      ${brandBar()}
+      <header class="page-head downloads-head">
+        <div>
+          <h1 class="t-display">Downloads</h1>
+          <p>Watch saved episodes without an internet connection.</p>
+        </div>
+        ${items.length ? '<button class="btn btn-line" data-download-clear>Clear all</button>' : ''}
+      </header>
+      ${items.length ? `
+        <section class="downloads-list">
+          ${items.map(item => {
+            const progress = Math.round(Math.max(0, Math.min(1, item.progress || 0)) * 100);
+            const ready = item.status === 'complete';
+            return `
+              <article class="download-item" data-download-key="${esc(item.key)}">
+                <img src="${esc(item.cover || '')}" alt="" loading="lazy">
+                <div class="download-item-body">
+                  <b>${esc(item.title || 'Downloaded episode')}</b>
+                  <span>Episode ${esc(item.episode)} · ${esc(item.language === 'dub' ? 'Dub' : 'Sub')} · ${esc(item.quality || `Quality ${Number(item.source) + 1}`)}</span>
+                  ${ready
+                    ? '<span class="download-ready">Available offline</span>'
+                    : `<span class="download-progress-label">Downloading ${progress}%</span>
+                       <progress value="${progress}" max="100"></progress>`}
+                  <div class="download-item-actions">
+                    ${ready ? '<button class="btn btn-tint" data-offline-play>Watch offline</button>' : ''}
+                    <button class="btn btn-line" data-download-delete>Delete</button>
+                  </div>
+                </div>
+              </article>`;
+          }).join('')}
+        </section>` : empty(
+          'No offline episodes',
+          'Choose a quality in the player and press Download to save an episode here.',
+          '<a class="btn btn-tint" href="#/home">Browse anime</a>'
+        )}
+    </div>`;
+}
+
 /* ── detail ──────────────────────────────────────────────── */
 
 export function detailShell() {
@@ -736,8 +778,32 @@ export function playerQualityControl(playback = null) {
     </label>`;
 }
 
+export function playerDownloadControl(playback = null) {
+  if (playback?.provider === 'offline') {
+    return '<span class="download-note">Saved on this device</span>';
+  }
+
+  const variants = (playback?.variants || [])
+    .filter(variant => variant.downloadUrl);
+  if (!variants.length) {
+    return '<span class="download-note">Download unavailable for this server</span>';
+  }
+
+  return `
+    <div class="player-downloads" aria-label="Download qualities">
+      <span>Save</span>
+      ${variants.map((variant, index) => {
+        const label = variant.quality && variant.quality !== 'Auto'
+          ? variant.quality
+          : `Quality ${index + 1}`;
+        return `<button class="download-quality" data-player-download="${esc(variant.downloadIndex)}"
+          title="Download ${esc(label)}">${svg('download')}<span>${esc(label)}</span></button>`;
+      }).join('')}
+    </div>`;
+}
+
 /** In-app episode player with Anivexa loading before the MegaPlay fallback. */
-export function playerView(m, episode = 1, language = 'sub', playback = { loading: true }) {
+export function playerView(m, episode = 1, language = 'sub', playback = { loading: true }, offline = false) {
   const episodes = episodeRows(m);
   const current = episodes.find(e => e.n === Number(episode)) || episodes[0];
   const n = current?.n || Number(episode) || 1;
@@ -768,14 +834,16 @@ export function playerView(m, episode = 1, language = 'sub', playback = { loadin
                    <p>The episode list will appear after an official release.</p></div>`}
         </div>
       </div>
-      <div class="player-servers" data-player-servers role="group" aria-label="Playback servers">
-        <button class="player-server on" data-player-server="anivexa" disabled>
-          <b>Server 1</b><span>Anivexa</span>
-        </button>
-        <button class="player-server" data-player-server="megaplay">
-          <b>Server 2</b><span>MegaPlay</span>
-        </button>
-      </div>
+      ${offline
+        ? '<div class="player-offline-badge">Offline download</div>'
+        : `<div class="player-servers" data-player-servers role="group" aria-label="Playback servers">
+          <button class="player-server on" data-player-server="anivexa" disabled>
+            <b>Server 1</b><span>Anivexa</span>
+          </button>
+          <button class="player-server" data-player-server="megaplay">
+            <b>Server 2</b><span>MegaPlay</span>
+          </button>
+        </div>`}
        <div class="player-toolbar">
          <button class="player-control${previous ? '' : ' disabled'}" data-player-episode="${previous || ''}" ${previous ? '' : 'disabled'} aria-label="Previous episode">
            ${svg('previous')}<span>Previous</span>
@@ -793,6 +861,7 @@ export function playerView(m, episode = 1, language = 'sub', playback = { loadin
            <button class="${language === 'dub' ? 'on' : ''}" data-player-language="dub">Dub</button>
          </div>
          <div data-player-quality-container>${playerQualityControl(playback)}</div>
+         <div data-player-download-container>${playerDownloadControl(playback)}</div>
          <span class="player-hint" data-player-hint>Trying Anivexa first…</span>
        </div>
        <div class="player-episodes">

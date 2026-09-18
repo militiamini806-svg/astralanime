@@ -58,6 +58,15 @@ export const ANIVEXA_PROVIDER_ORDER = [
   'kaa'
 ].map(name => name.toLowerCase());
 
+export function anivexaDownloadUrl(provider, anilistId, episode, language = 'sub', source = 0) {
+  const id = Number(anilistId);
+  const ep = Number(episode);
+  if (!provider || !Number.isInteger(id) || id <= 0 || !Number.isInteger(ep) || ep <= 0) return '';
+  const audio = language === 'dub' ? 'dub' : 'sub';
+  const index = Math.max(0, Number.parseInt(source, 10) || 0);
+  return `${ANIVEXA_API_BASE}/download/${encodeURIComponent(provider)}/${id}/${audio}/${encodeURIComponent(provider)}-${ep}?source=${index}`;
+}
+
 /**
  * Build the private playback route for a title.
  * The embed is intentionally kept here so views never need to know which
@@ -105,10 +114,17 @@ function candidateQuality(value) {
  * Provider response shapes differ slightly. Keep the normalisation here so
  * the player does not need to know whether a source came from `streams`,
  * `sources`, `allServers`, or a direct `stream_url` field.
+ *
+ * Prefer an embed when the provider supplies one. A raw HLS `.m3u8` URL is
+ * valid, but it is not natively playable by most Chrome and Android WebView
+ * versions without an HLS library. The provider's embed handles that stream
+ * inside its own player. Direct MP4/WebM results still remain available as a
+ * fallback when no embed is supplied.
  */
 function collectPlaybackCandidates(data) {
   const candidates = [];
   const seen = new Set();
+  let downloadIndex = 0;
 
   const add = (value, preferredKind = '', quality = '') => {
     if (Array.isArray(value)) {
@@ -120,10 +136,12 @@ function collectPlaybackCandidates(data) {
     if (direct) {
       if (!seen.has(direct)) {
         seen.add(direct);
+        const kind = preferredKind || candidateKind(direct);
         candidates.push({
           url: direct,
-          kind: preferredKind || candidateKind(direct),
-          quality: quality || 'Auto'
+          kind,
+          quality: quality || 'Auto',
+          downloadIndex: kind === 'video' ? downloadIndex++ : null
         });
       }
       return;
@@ -140,11 +158,17 @@ function collectPlaybackCandidates(data) {
     if (value.link) add(value.link, '', itemQuality);
   };
 
-  add(data?.stream_url);
+  /*
+   * Put provider-supplied embeds first. In particular, Anivexa responses can
+   * contain both `stream_url: "...master.m3u8"` and an `embed` URL for the
+   * same source. Selecting the HLS URL first makes Android WebView emit a
+   * video error and sends the user to MegaPlay even though the embed works.
+   */
+  add(data?.embeds, 'iframe');
+  add(data?.allServers, 'iframe');
   add(data?.streams);
   add(data?.sources);
-  add(data?.allServers);
-  add(data?.embeds, 'iframe');
+  add(data?.stream_url);
   return candidates;
 }
 
@@ -180,11 +204,17 @@ export async function anivexaPlayback(media, episode, language = 'sub') {
       if (data?.error) continue;
 
       const variants = collectPlaybackCandidates(data);
-      const candidate = variants[0];
+      const downloadable = variants.map(variant => ({
+        ...variant,
+        downloadUrl: variant.kind === 'video'
+          ? anivexaDownloadUrl(provider, anilistId, ep, language, variant.downloadIndex)
+          : ''
+      }));
+      const candidate = downloadable[0];
       if (candidate) {
         return {
           ...candidate,
-          variants,
+          variants: downloadable,
           provider,
           label: `Anivexa · ${provider}`
         };
