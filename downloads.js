@@ -159,34 +159,42 @@ export const Downloads = {
     write();
 
     try {
-      const uri = await localUri(path);
-      const progressListener = await FileTransfer.addListener('progress', event => {
-        const progress = Number(event?.percent || 0) / 100;
-        if (Number.isFinite(progress) && progress > 0) {
-          item.progress = Math.min(1, progress);
-          item.updatedAt = Date.now();
-          items = items.map(row => row.key === key ? { ...item } : row);
-          write();
-          onProgress?.(item.progress);
-        }
-      }).catch(() => null);
+      const report = progress => {
+        item.progress = progress;
+        item.updatedAt = Date.now();
+        items = items.map(row => row.key === key ? { ...item } : row);
+        write();
+        onProgress?.(progress);
+      };
 
-      try {
-        await FileTransfer.downloadFile({
-          url: meta.url,
-          path: uri,
-          progress: true
-        });
-      } catch (nativeError) {
-        if (!globalThis.fetch) throw nativeError;
-        await browserDownload(meta.url, path, progress => {
-          item.progress = progress;
-          items = items.map(row => row.key === key ? { ...item } : row);
-          write();
-          onProgress?.(progress);
-        });
-      } finally {
-        progressListener?.remove?.();
+      if (Capacitor.isNativePlatform()) {
+        const uri = await localUri(path);
+        const progressListener = await FileTransfer.addListener('progress', event => {
+          const percent = Number(event?.percent);
+          const bytes = Number(event?.bytes);
+          const contentLength = Number(event?.contentLength);
+          const progress = Number.isFinite(percent)
+            ? percent / 100
+            : contentLength > 0
+              ? bytes / contentLength
+              : 0;
+          if (progress > 0) report(Math.min(1, progress));
+        }).catch(() => null);
+
+        try {
+          await FileTransfer.downloadFile({
+            url: meta.url,
+            path: uri,
+            progress: true
+          });
+        } catch (nativeError) {
+          if (!globalThis.fetch) throw nativeError;
+          await browserDownload(meta.url, path, report);
+        } finally {
+          progressListener?.remove?.();
+        }
+      } else {
+        await browserDownload(meta.url, path, report);
       }
 
       item.status = 'complete';
