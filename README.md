@@ -35,8 +35,10 @@ exactly as it is, which is why the build stays small.
 ## Screens
 
 **Home** — the logo bar floats over a rotating hero of what's airing now, then
-trending, a ranked top ten, this season, most watched ever, films, next season,
-and two genre rails.
+**Continue watching** (anything you're partway through, jumping straight to the
+next episode — drawn from the local library, so it renders instantly and works
+with no connection), trending, a ranked top ten, this season, most watched ever,
+films, next season, and two genre rails.
 
 **Browse:** a full-screen section menu for completed titles, most popular,
 movies, TV series, OVAs, ONAs, specials, and genres.

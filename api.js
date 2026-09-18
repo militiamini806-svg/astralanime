@@ -1,7 +1,14 @@
 /* api.js — two sources, one shape.
  *
  *  AniList : https://graphql.anilist.co       (GraphQL, no key needed)
- *  MAL     : https://api.jikan.moe/v4         (Jikan mirrors MyAnimeList, no key)
+ *  MAL     : https://api.myanimelist.net/v2   (official, needs a Client ID)
+ *            https://api.jikan.moe/v4         (unofficial mirror, used as fallback)
+ *
+ *  The MyAnimeList branch talks to the official v2 API the way the
+ *  myanimelist-api-v2 client does: every read goes to api.myanimelist.net/v2
+ *  with the Client ID in an X-MAL-CLIENT-ID header. When no Client ID has been
+ *  entered in Settings, or the call fails, it drops back to Jikan so the
+ *  catalogue never goes blank.
  *
  *  Both are normalised into the Media shape below so every view can render
  *  either source without knowing which one it got.
@@ -14,8 +21,11 @@
  *  }
  */
 
+import { Store } from './store.js';
+
 const AL_URL = 'https://graphql.anilist.co';
 const JIKAN = 'https://api.jikan.moe/v4';
+const MAL_URL = 'https://api.myanimelist.net/v2';
 const PLAYBACK_BASE = 'https://megaplay.buzz';
 
 /**
@@ -106,6 +116,114 @@ async function jikan(path) {
     return cacheSet(key, json.data);
   });
 }
+
+/* ── official MyAnimeList v2 ─────────────────────────────── */
+
+/* The fields the official API will hand back. Anything not asked for is
+ * simply absent from the response, so these lists decide what a card and a
+ * detail page can show. my_list_status is left out on purpose: it needs a
+ * user token, and reading the catalogue only needs the Client ID. */
+const MAL_LIST_FIELDS = [
+  'id', 'title', 'main_picture', 'alternative_titles', 'start_date', 'end_date',
+  'synopsis', 'mean', 'rank', 'popularity', 'num_list_users', 'num_scoring_users',
+  'nsfw', 'genres', 'media_type', 'status', 'num_episodes', 'start_season',
+  'broadcast', 'source', 'average_episode_duration', 'rating', 'studios'
+].join(',');
+
+const MAL_FULL_FIELDS =
+  MAL_LIST_FIELDS + ',background,related_anime,recommendations,statistics';
+
+const malClientId = () => (Store.settings.malClientId || '').trim();
+
+/**
+ * api.myanimelist.net sends no CORS headers, so a plain browser fetch is
+ * refused. Inside the APK, Capacitor's native HTTP bridge makes the request
+ * outside the WebView, where CORS does not apply. Use it when it is there and
+ * fall back to fetch everywhere else.
+ */
+async function httpGetJson(url, headers = {}) {
+  const native = typeof window !== 'undefined' && window.Capacitor?.Plugins?.CapacitorHttp;
+  if (native?.request) {
+    const res = await native.request({
+      url, method: 'GET',
+      headers: { Accept: 'application/json', ...headers },
+      connectTimeout: 20000, readTimeout: 20000
+    });
+    const status = Number(res?.status) || 0;
+    if (status < 200 || status >= 300) {
+      const e = new Error('MyAnimeList refused that request (' + status + ')');
+      e.status = status;
+      throw e;
+    }
+    return typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  }
+  const res = await fetch(url, { headers: { Accept: 'application/json', ...headers } });
+  if (!res.ok) {
+    const e = new Error('MyAnimeList refused that request (' + res.status + ')');
+    e.status = res.status;
+    throw e;
+  }
+  return res.json();
+}
+
+async function mal(path, params = {}) {
+  const clientId = malClientId();
+  if (!clientId) {
+    const e = new Error('No MyAnimeList Client ID set');
+    e.code = 'no-client-id';
+    throw e;
+  }
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, v);
+  });
+  const url = MAL_URL + path + (qs.toString() ? '?' + qs : '');
+  const key = 'm:' + url;
+  const hit = cacheGet(key);
+  if (hit) return hit;
+  return cacheSet(key, await httpGetJson(url, { 'X-MAL-CLIENT-ID': clientId }));
+}
+
+/** Any of the official list endpoints, normalised into the shared page shape. */
+async function malPage(path, params, { adult, page = 1, limit = 20, keep = null }) {
+  const json = await mal(path, {
+    ...params,
+    limit,
+    offset: (Math.max(1, Number(page) || 1) - 1) * limit,
+    fields: MAL_LIST_FIELDS
+  });
+  let nodes = (json?.data || []).map(row => row.node || row).filter(Boolean);
+  if (!adult) nodes = nodes.filter(n => !n.nsfw || n.nsfw === 'white');
+  if (keep) nodes = nodes.filter(keep);
+  return {
+    items: nodes.map(fromMal).filter(Boolean),
+    hasNext: !!json?.paging?.next,
+    page
+  };
+}
+
+/**
+ * Prefer the official API, fall back to Jikan. Without a Client ID there is
+ * nothing to try, so Jikan is used directly and no time is wasted.
+ */
+async function malThenJikan(official, mirror) {
+  if (malClientId()) {
+    try {
+      return await official();
+    } catch (err) {
+      if (err.code !== 'no-client-id') {
+        console.warn('MyAnimeList API unavailable, using Jikan:', err.message);
+      }
+    }
+  }
+  return mirror();
+}
+
+const MAL_SEASON = s => String(s || '').toLowerCase();
+
+const MAL_RANKING_BY_FORMAT = {
+  TV: 'tv', MOVIE: 'movie', OVA: 'ova', SPECIAL: 'special'
+};
 
 async function anilist(query, variables) {
   const key = 'a:' + query + JSON.stringify(variables);
@@ -302,6 +420,80 @@ function fromJikan(m) {
   };
 }
 
+/* The official API speaks its own vocabulary; line it up with AniList's. */
+const MAL_FORMAT = {
+  tv: 'TV', tv_special: 'SPECIAL', movie: 'MOVIE', ova: 'OVA',
+  ona: 'ONA', special: 'SPECIAL', music: 'MUSIC', unknown: null
+};
+
+const MAL_STATUS = {
+  finished_airing: 'FINISHED',
+  currently_airing: 'RELEASING',
+  not_yet_aired: 'NOT_YET_RELEASED'
+};
+
+function malDate(s) {
+  if (!s) return null;
+  const [year, month, day] = String(s).split('-').map(n => parseInt(n, 10));
+  return { year: year || null, month: month || null, day: day || null };
+}
+
+function malStub(n) {
+  if (!n) return null;
+  return {
+    src: 'mal',
+    id: n.id,
+    title: { romaji: n.title || '', english: n.alternative_titles?.en || '' },
+    cover: n.main_picture?.large || n.main_picture?.medium || '',
+    color: null,
+    score: n.mean ? Math.round(n.mean * 10) : null,
+    format: MAL_FORMAT[n.media_type] || null,
+    year: n.start_season?.year || malDate(n.start_date)?.year || null
+  };
+}
+
+function fromMal(m) {
+  if (!m) return null;
+  const alt = m.alternative_titles || {};
+  return {
+    src: 'mal',
+    id: m.id,
+    malId: m.id,
+    title: { romaji: m.title || '', english: alt.en || '', native: alt.ja || '' },
+    cover: m.main_picture?.large || m.main_picture?.medium || '',
+    banner: m.main_picture?.large || m.main_picture?.medium || '',
+    color: null,
+    description: (m.synopsis || '').replace(/\[Written by MAL Rewrite\]/g, '').trim(),
+    score: m.mean ? Math.round(m.mean * 10) : null,
+    popularity: m.num_list_users ?? null,
+    favourites: m.statistics?.num_list_users ?? null,
+    episodes: m.num_episodes || null,
+    duration: m.average_episode_duration ? Math.round(m.average_episode_duration / 60) : null,
+    format: MAL_FORMAT[m.media_type] || (m.media_type || '').toUpperCase() || null,
+    status: MAL_STATUS[m.status] || null,
+    season: m.start_season?.season ? m.start_season.season.toUpperCase() : null,
+    year: m.start_season?.year || malDate(m.start_date)?.year || null,
+    startDate: malDate(m.start_date),
+    endDate: malDate(m.end_date),
+    source: m.source || null,
+    synonyms: alt.synonyms || [],
+    genres: (m.genres || []).map(g => g.name),
+    studios: (m.studios || []).map(s => s.name),
+    trailer: null,
+    nextEp: null,
+    links: [],
+    otherLinks: [{ site: 'MyAnimeList', url: `https://myanimelist.net/anime/${m.id}`, color: '#2E51A2' }],
+    streamEpisodes: [],
+    tags: (m.genres || []).map(g => g.name).slice(0, 10),
+    characters: [],
+    relations: (m.related_anime || []).map(r => {
+      const stub = malStub(r.node);
+      return stub && { ...stub, relation: (r.relation_type_formatted || r.relation_type || '').toUpperCase() };
+    }).filter(Boolean),
+    recommendations: (m.recommendations || []).map(r => malStub(r.node)).filter(Boolean)
+  };
+}
+
 /* ── seasons ─────────────────────────────────────────────── */
 
 function currentSeason(d = new Date()) {
@@ -345,16 +537,25 @@ export const Api = {
   /** Hero: what is airing right now, ordered by how hot it is. */
   async airingNow({ source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/seasons/now?limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      return malThenJikan(
+        () => malPage(`/anime/season/${new Date().getFullYear()}/${MAL_SEASON(currentSeason())}`,
+                      { sort: 'anime_num_list_users' }, { adult, page, keep: n => n.status === 'currently_airing' }),
+        async () => {
+          const d = await jikan(`/seasons/now?limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     return alPage({ page, sort: ['TRENDING_DESC'], status: 'RELEASING', isAdult: !!adult ? undefined : false });
   },
 
   async trending({ source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/top/anime?filter=airing&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      return malThenJikan(
+        () => malPage('/anime/ranking', { ranking_type: 'airing' }, { adult, page }),
+        async () => {
+          const d = await jikan(`/top/anime?filter=airing&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     return alPage({ page, sort: ['TRENDING_DESC'], isAdult: adult ? undefined : false });
   },
@@ -362,38 +563,66 @@ export const Api = {
   /** The ranked top ten — all time, by score. */
   async topRated({ source, adult, page = 1, perPage = 20 }) {
     if (source === 'mal') {
-      const d = await jikan(`/top/anime?limit=${perPage}&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === perPage, page };
+      return malThenJikan(
+        () => malPage('/anime/ranking', { ranking_type: 'all' }, { adult, page, limit: perPage }),
+        async () => {
+          const d = await jikan(`/top/anime?limit=${perPage}&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === perPage, page };
+        });
     }
     return alPage({ page, perPage, sort: ['SCORE_DESC'], isAdult: adult ? undefined : false });
   },
 
   async mostPopular({ source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/top/anime?filter=bypopularity&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      return malThenJikan(
+        () => malPage('/anime/ranking', { ranking_type: 'bypopularity' }, { adult, page }),
+        async () => {
+          const d = await jikan(`/top/anime?filter=bypopularity&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     return alPage({ page, sort: ['POPULARITY_DESC'], isAdult: adult ? undefined : false });
   },
 
   async completed({ source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/anime?status=complete&order_by=score&sort=desc&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      return malThenJikan(
+        /* v2 has no "finished" filter, so take the ranked list and keep the finished ones. */
+        () => malPage('/anime/ranking', { ranking_type: 'all' },
+                      { adult, page, limit: 40, keep: n => n.status === 'finished_airing' }),
+        async () => {
+          const d = await jikan(`/anime?status=complete&order_by=score&sort=desc&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     return alPage({ page, sort: ['SCORE_DESC'], status: 'FINISHED', isAdult: adult ? undefined : false });
   },
 
   async byFormat(format, { source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/anime?type=${encodeURIComponent(format.toLowerCase())}&order_by=popularity&sort=desc&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      const ranking = MAL_RANKING_BY_FORMAT[format];
+      return malThenJikan(
+        /* ONA has no ranking of its own; sift it out of the overall ranking. */
+        () => ranking
+          ? malPage('/anime/ranking', { ranking_type: ranking }, { adult, page })
+          : malPage('/anime/ranking', { ranking_type: 'bypopularity' },
+                    { adult, page, limit: 50, keep: n => MAL_FORMAT[n.media_type] === format }),
+        async () => {
+          const d = await jikan(`/anime?type=${encodeURIComponent(format.toLowerCase())}&order_by=popularity&sort=desc&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     return alPage({ page, sort: ['POPULARITY_DESC'], format, isAdult: adult ? undefined : false });
   },
 
   async thisSeason({ source, adult, page = 1 }) {
-    if (source === 'mal') return Api.airingNow({ source, adult, page });
+    if (source === 'mal') {
+      return malThenJikan(
+        () => malPage(`/anime/season/${new Date().getFullYear()}/${MAL_SEASON(currentSeason())}`,
+                      { sort: 'anime_num_list_users' }, { adult, page }),
+        () => Api.airingNow({ source, adult, page }));
+    }
     return alPage({
       page, sort: ['POPULARITY_DESC'],
       season: currentSeason(), year: new Date().getFullYear(),
@@ -403,8 +632,12 @@ export const Api = {
 
   async upcoming({ source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/seasons/upcoming?limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      return malThenJikan(
+        () => malPage('/anime/ranking', { ranking_type: 'upcoming' }, { adult, page }),
+        async () => {
+          const d = await jikan(`/seasons/upcoming?limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     const ns = nextSeason();
     return alPage({ page, sort: ['POPULARITY_DESC'], season: ns.season, year: ns.year, isAdult: adult ? undefined : false });
@@ -412,13 +645,18 @@ export const Api = {
 
   async topMovies({ source, adult, page = 1 }) {
     if (source === 'mal') {
-      const d = await jikan(`/top/anime?type=movie&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+      return malThenJikan(
+        () => malPage('/anime/ranking', { ranking_type: 'movie' }, { adult, page }),
+        async () => {
+          const d = await jikan(`/top/anime?type=movie&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
+          return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+        });
     }
     return alPage({ page, sort: ['SCORE_DESC'], format: 'MOVIE', isAdult: adult ? undefined : false });
   },
 
   async byGenre(genre, { source, adult, page = 1 }) {
+    /* The official v2 API has no genre filter, so this one stays on Jikan. */
     if (source === 'mal') {
       const d = await jikan(`/anime?genres=${encodeURIComponent(genre)}&order_by=score&sort=desc&limit=20&sfw=${adult ? 'false' : 'true'}&page=${page}`);
       return { items: d.map(fromJikan), hasNext: d.length === 20, page };
@@ -426,14 +664,28 @@ export const Api = {
     return alPage({ page, sort: ['POPULARITY_DESC'], genre, isAdult: adult ? undefined : false });
   },
 
-  async search(q, { source, adult, page = 1, format = null, genre = null }) {
-    if (!q || !q.trim()) return { items: [], hasNext: false, page };
-    if (source === 'mal') {
-      const f = format ? `&type=${format.toLowerCase()}` : '';
-      const g = genre ? `&genres=${encodeURIComponent(genre)}` : '';
-      const d = await jikan(`/anime?q=${encodeURIComponent(q)}&limit=20&sfw=${adult ? 'false' : 'true'}${f}${g}&page=${page}`);
-      return { items: d.map(fromJikan), hasNext: d.length === 20, page };
+  /** MyAnimeList title search, official API first. */
+  async malSearch(q, { adult, page = 1, format = null }) {
+    /* v2 rejects anything shorter than three characters. */
+    if (q.trim().length < 3) {
+      const e = new Error('Type at least three letters');
+      e.code = 'too-short';
+      throw e;
     }
+    return malPage('/anime', { q: q.trim() }, {
+      adult, page, limit: 20,
+      keep: format ? n => MAL_FORMAT[n.media_type] === format : null
+    });
+  },
+
+  async jikanSearch(q, { adult, page = 1, format = null, genre = null }) {
+    const f = format ? `&type=${format.toLowerCase()}` : '';
+    const g = genre ? `&genres=${encodeURIComponent(genre)}` : '';
+    const d = await jikan(`/anime?q=${encodeURIComponent(q)}&limit=20&sfw=${adult ? 'false' : 'true'}${f}${g}&page=${page}`);
+    return { items: (d || []).map(fromJikan).filter(Boolean), hasNext: (d || []).length === 20, page };
+  },
+
+  async alSearch(q, { adult, page = 1, format = null, genre = null }) {
     const Q = `
       query ($q:String,$page:Int,$format:MediaFormat,$genre:String,$isAdult:Boolean){
         Page(page:$page, perPage:20){
@@ -443,36 +695,90 @@ export const Api = {
         }
       }`;
     const d = await anilist(Q, { q, page, format, genre, isAdult: adult ? undefined : false });
-    return { items: d.Page.media.map(fromAniList), hasNext: d.Page.pageInfo.hasNextPage, page };
+    return {
+      items: (d?.Page?.media || []).map(fromAniList).filter(Boolean),
+      hasNext: !!d?.Page?.pageInfo?.hasNextPage,
+      page
+    };
+  },
+
+  /**
+   * Title search. The chosen catalogue is asked first; if it errors or comes
+   * back empty the other one is asked too, so a title that exists is never
+   * reported as missing just because one service is having a bad day.
+   */
+  async search(q, { source, adult, page = 1, format = null, genre = null }) {
+    if (!q || !q.trim()) return { items: [], hasNext: false, page };
+    const opts = { adult, page, format, genre };
+
+    const attempts = source === 'mal'
+      ? [() => Api.malSearch(q, opts), () => Api.jikanSearch(q, opts), () => Api.alSearch(q, opts)]
+      : [() => Api.alSearch(q, opts), () => Api.jikanSearch(q, opts)];
+
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        const res = await attempt();
+        if (res.items.length) return res;
+      } catch (err) {
+        if (err.code !== 'no-client-id' && err.code !== 'too-short') lastError = err;
+      }
+    }
+    if (lastError) throw lastError;
+    return { items: [], hasNext: false, page };
   },
 
   /** Full record for the detail page. */
   async detail(src, id) {
     if (src === 'mal') {
-      const m = await jikan(`/anime/${id}/full`);
-      const media = fromJikan(m);
-      const [chars, recs, eps] = await Promise.all([
-        jikan(`/anime/${id}/characters`).catch(() => []),
-        jikan(`/anime/${id}/recommendations`).catch(() => []),
-        jikan(`/anime/${id}/episodes`).catch(() => [])
-      ]);
-      media.characters = (chars || []).slice(0, 14).map(c => ({
-        id: c.character.mal_id, name: c.character.name,
-        img: c.character.images?.jpg?.image_url, role: (c.role || '').toUpperCase()
-      }));
-      media.recommendations = (recs || []).slice(0, 12).map(r => ({
-        src: 'mal', id: r.entry.mal_id,
-        title: { romaji: r.entry.title, english: '' },
-        cover: r.entry.images?.jpg?.large_image_url, score: null
-      }));
-      media.streamEpisodes = (eps || []).map(e => ({
-        n: e.mal_id, title: e.title || '', thumb: '', url: e.url, site: 'MyAnimeList'
-      }));
+      const media = await malThenJikan(
+        async () => {
+          const record = await mal(`/anime/${Number(id)}`, { fields: MAL_FULL_FIELDS });
+          const full = fromMal(record);
+          /* v2 exposes no cast or episode list; Jikan fills those two in. */
+          const [chars, eps] = await Promise.all([
+            jikan(`/anime/${id}/characters`).catch(() => []),
+            jikan(`/anime/${id}/episodes`).catch(() => [])
+          ]);
+          full.characters = (chars || []).slice(0, 14).map(c => ({
+            id: c.character.mal_id, name: c.character.name,
+            img: c.character.images?.jpg?.image_url, role: (c.role || '').toUpperCase()
+          }));
+          full.streamEpisodes = (eps || []).map(e => ({
+            n: e.mal_id, title: e.title || '', thumb: '', url: e.url, site: 'MyAnimeList'
+          }));
+          return full;
+        },
+        () => Api.jikanDetail(id));
       return media;
     }
     const Q = `query ($id:Int){ Media(id:$id, type:ANIME){ ${F_FULL} } }`;
     const d = await anilist(Q, { id: Number(id) });
     return fromAniList(d.Media);
+  },
+
+  /** The Jikan version of a detail page, kept as the fallback path. */
+  async jikanDetail(id) {
+    const m = await jikan(`/anime/${id}/full`);
+    const media = fromJikan(m);
+    const [chars, recs, eps] = await Promise.all([
+      jikan(`/anime/${id}/characters`).catch(() => []),
+      jikan(`/anime/${id}/recommendations`).catch(() => []),
+      jikan(`/anime/${id}/episodes`).catch(() => [])
+    ]);
+    media.characters = (chars || []).slice(0, 14).map(c => ({
+      id: c.character.mal_id, name: c.character.name,
+      img: c.character.images?.jpg?.image_url, role: (c.role || '').toUpperCase()
+    }));
+    media.recommendations = (recs || []).slice(0, 12).map(r => ({
+      src: 'mal', id: r.entry.mal_id,
+      title: { romaji: r.entry.title, english: '' },
+      cover: r.entry.images?.jpg?.large_image_url, score: null
+    }));
+    media.streamEpisodes = (eps || []).map(e => ({
+      n: e.mal_id, title: e.title || '', thumb: '', url: e.url, site: 'MyAnimeList'
+    }));
+    return media;
   },
 
   /** Cross-source lookup, used when the library holds an id from the other source. */

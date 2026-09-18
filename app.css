@@ -350,6 +350,36 @@ a { color: inherit; text-decoration: none; }
 
 .card-art .prog i { display: block; height: 100%; background: var(--accent); }
 
+/* ── continue watching ────────────────────────────────────── */
+
+.resume-card { width: 132px; }
+.resume-card .card-art { aspect-ratio: 2 / 3; }
+.resume-card .card-art a { display: block; width: 100%; height: 100%; }
+
+.resume-card > span {
+  color: var(--ember);
+  font-variant-numeric: tabular-nums;
+}
+
+.resume-play {
+  position: absolute;
+  right: 7px;
+  bottom: 9px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--paper);
+  background: rgba(5, 5, 10, .74);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(244, 242, 245, .18);
+  transition: transform .16s ease, background .16s ease;
+}
+
+.resume-play svg { width: 14px; height: 14px; margin-left: 1px; }
+.resume-play:active { transform: scale(.92); background: var(--accent); }
+
 .card h4 {
   margin: 8px 0 2px;
   font-size: 13px;

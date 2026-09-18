@@ -134,6 +134,71 @@ function openExternal(url) {
   else window.open(url, '_blank', 'noopener');
 }
 
+/**
+ * Rebuild enough of a Media object from a saved library stub to open the
+ * player without touching the network. The episode list is synthesised up to
+ * the one being resumed, since a stub keeps no episode data of its own.
+ */
+function mediaFromEntry(e) {
+  const s = e.stub || {};
+  const upto = Math.max(1, Math.min((e.progress || 0) + 1, s.episodes || Infinity));
+  return {
+    src: e.src,
+    id: e.id,
+    malId: e.malId || null,
+    title: s.title || {},
+    cover: s.cover || '',
+    color: s.color || null,
+    episodes: s.episodes || null,
+    format: s.format || null,
+    year: s.year || null,
+    score: s.score || null,
+    status: s.status_ || null,
+    genres: [],
+    nextEp: null,
+    streamEpisodes: Array.from({ length: upto }, (_, i) => ({ n: i + 1 }))
+  };
+}
+
+/**
+ * A player opened from a library stub knows the title and the episode but not
+ * the full episode list. Fetch the real record and patch the few parts that
+ * depend on it. The iframe is deliberately left alone — replacing or
+ * reparenting it would restart playback.
+ */
+async function hydratePlayer(src, id, episode) {
+  let full;
+  try {
+    full = await Api.detail(src, id);
+  } catch {
+    return;                       // offline is fine; the stub still plays
+  }
+  if (!full || !playerState) return;
+  if (String(playerState.media.id) !== String(id) || playerState.episode !== episode) return;
+
+  playerState.media = full;
+  const host = document.getElementById('player-host');
+  if (!host) return;
+
+  const total = V.episodeRows(full).length;
+  const label = host.querySelector('.player-bar .t span');
+  if (label) label.textContent = `Episode ${episode}${total ? ` of ${total}` : ''}`;
+
+  const count = host.querySelector('.player-episodes-head span');
+  if (count) count.textContent = `${total || 0} available`;
+
+  const grid = host.querySelector('.player-episode-grid');
+  if (grid) grid.innerHTML = V.episodeGrid(full, episode);
+
+  const controls = host.querySelectorAll('.player-toolbar .player-control');
+  const nextBtn = controls[2];
+  if (nextBtn && episode < total) {
+    nextBtn.dataset.playerEpisode = String(episode + 1);
+    nextBtn.classList.remove('disabled');
+    nextBtn.removeAttribute('disabled');
+  }
+}
+
 /* ── routes ──────────────────────────────────────────────── */
 
 async function renderHome() {
@@ -195,6 +260,12 @@ function queueSearch() {
 async function runSearch() {
   const results = document.getElementById('results');
   if (!results) return;
+
+  /* Read the box itself rather than trusting that every keystroke reached us.
+     Android keyboards using composition don't always fire `input` per letter. */
+  const box = document.getElementById('q');
+  if (box) searchState.q = box.value;
+
   const seq = ++searchState.seq;
   const { q, format, genre } = searchState;
 
@@ -415,6 +486,19 @@ document.addEventListener('click', async e => {
       syncUp(m);
       showHeroSlide(heroIndex);
       toast('Added to Plan to watch');
+    }
+    return;
+  }
+
+  /* continue watching */
+  const resume = t.closest('[data-resume]');
+  if (resume) {
+    const [src, id, ep] = resume.dataset.resume.split(':');
+    const entry = Store.entry(src, id);
+    if (entry) {
+      const episode = Number(ep);
+      openPlayer(mediaFromEntry(entry), episode);
+      hydratePlayer(src, id, episode);
     }
     return;
   }
@@ -656,7 +740,24 @@ document.addEventListener('input', e => {
   if (e.target.id === 'q') { searchState.q = e.target.value; queueSearch(); }
 });
 
+/* `search` fires when the keyboard's search key is pressed and when the box is
+   cleared; Enter covers the desktop case. Both skip the debounce. */
+document.addEventListener('search', e => {
+  if (e.target.id !== 'q') return;
+  clearTimeout(searchTimer);
+  searchState.q = e.target.value;
+  runSearch();
+});
+
 document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.id === 'q') {
+    e.preventDefault();
+    clearTimeout(searchTimer);
+    searchState.q = e.target.value;
+    e.target.blur();
+    runSearch();
+    return;
+  }
   if (e.key !== 'Escape') return;
   if (document.getElementById('player-host')) closePlayer();
   else closeSheet();
@@ -696,6 +797,9 @@ Store.subscribe(() => {
     const body = document.getElementById('libbody');
     if (body) body.innerHTML = V.libraryBody(libTab);
   }
+  /* ticking an episode anywhere should move the home rail with it */
+  const resume = document.getElementById('resume');
+  if (resume) resume.innerHTML = V.resumeRail();
 });
 
 if (!location.hash) location.hash = '#/home';

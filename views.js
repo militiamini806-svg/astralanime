@@ -169,6 +169,59 @@ export function fillRail(id, items, ranked) {
     : items.map(m => card(m)).join('');
 }
 
+/* ── continue watching ───────────────────────────────────── */
+
+/**
+ * The one rail that needs no network. Everything it shows already lives in
+ * localStorage from the last time a title was opened, so it renders on the
+ * first frame and still works with both catalogues unreachable.
+ */
+export function resumeRail() {
+  const rows = Object.values(Store.library)
+    .filter(e => {
+      const total = e.stub?.episodes;
+      if (e.status === 'completed' || e.status === 'dropped') return false;
+      if (total && e.progress >= total) return false;
+      return e.status === 'watching' || e.progress > 0;
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 12);
+
+  if (!rows.length) return '';
+
+  return `
+    <section class="rail resume-rail">
+      <div class="rail-head">
+        <div>
+          <h3 class="t-rail">Continue watching</h3>
+          <p>Picks up at the next episode</p>
+        </div>
+      </div>
+      <div class="rail-track">${rows.map(resumeCard).join('')}</div>
+    </section>`;
+}
+
+function resumeCard(e) {
+  const s = e.stub || {};
+  const total = s.episodes || null;
+  const next = (e.progress || 0) + 1;
+  const pct = total ? Math.min(100, (e.progress / total) * 100) : 0;
+  const t = Store.titleOf(s);
+  return `
+    <div class="card resume-card" style="--tint:${esc(tintOf(s))}">
+      <div class="card-art">
+        <a href="#/anime/${e.src}/${e.id}" aria-label="${esc(t)}">
+          <img src="${esc(s.cover)}" alt="" loading="lazy" decoding="async">
+        </a>
+        <button class="resume-play" data-resume="${e.src}:${e.id}:${next}"
+                aria-label="Play episode ${next} of ${esc(t)}">${svg('play')}</button>
+        <span class="prog"><i style="width:${pct}%"></i></span>
+      </div>
+      <h4>${esc(t)}</h4>
+      <span>Episode ${next}${total ? ` of ${total}` : ''}</span>
+    </div>`;
+}
+
 /* ── home ────────────────────────────────────────────────── */
 
 export function homeShell() {
@@ -178,6 +231,7 @@ export function homeShell() {
       <section class="hero" id="hero">
         <div class="hero-slide on"><div class="skel" style="width:100%;height:100%"></div></div>
       </section>
+      <div id="resume">${resumeRail()}</div>
       <div id="rails">
         ${rail({ id: 'trending', title: 'Trending now', note: 'What everyone is picking up this week' })}
         ${rail({ id: 'top10', title: 'The top ten', note: 'Highest rated anime ever made', ranked: true })}
@@ -527,6 +581,18 @@ export function episodeRows(m) {
 }
 
 
+/** The episode buttons, on their own so the player can refresh just this. */
+export function episodeGrid(m, current) {
+  const episodes = episodeRows(m);
+  if (!episodes.length) {
+    return `<p class="player-no-episodes">No episodes are listed for this title.</p>`;
+  }
+  return episodes.map(e => `
+    <button class="player-episode${e.n === current ? ' on' : ''}${Store.isSeen(m.src, m.id, e.n) ? ' seen' : ''}" data-player-episode="${e.n}">
+      <span>${e.n}</span>${Store.isSeen(m.src, m.id, e.n) ? svg('check') : ''}
+    </button>`).join('');
+}
+
 /* ── player ──────────────────────────────────────────────── */
 
 /** In-app episode player. The iframe is the only playback surface. */
@@ -586,11 +652,7 @@ export function playerView(m, episode = 1, language = 'sub') {
        <div class="player-episodes">
          <div class="player-episodes-head"><b>Episodes</b><span>${total || 0} available</span></div>
          <div class="player-episode-grid">
-           ${episodes.length ? episodes.map(e => `
-             <button class="player-episode${e.n === n ? ' on' : ''}${Store.isSeen(m.src, m.id, e.n) ? ' seen' : ''}" data-player-episode="${e.n}">
-               <span>${e.n}</span>${Store.isSeen(m.src, m.id, e.n) ? svg('check') : ''}
-             </button>`).join('') : `
-             <p class="player-no-episodes">No episodes are listed for this title.</p>`}
+           ${episodeGrid(m, n)}
          </div>
       </div>
     </div>`;
@@ -755,7 +817,10 @@ export function settingsView() {
 
       <section class="set-group">
         <h3>MyAnimeList</h3>
-        <p>Optional. A client ID unlocks MAL's own API later; browsing works without one.</p>
+        <p>Paste a client ID to read the catalogue from MyAnimeList's own API.
+           Make one at myanimelist.net under Settings → API → Create ID, with
+           App Type "other" and no redirect URL.
+           ${s.malClientId ? 'In use.' : 'Without one the app falls back to the Jikan mirror, which is slower and rate limited.'}</p>
         <input class="field" id="mal-id" type="text" placeholder="Client ID" value="${esc(s.malClientId)}">
         <button class="btn btn-line btn-wide" data-save-mal style="margin-top:10px">Save client ID</button>
       </section>
