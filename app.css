@@ -1647,3 +1647,292 @@ a { color: inherit; text-decoration: none; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
   #app { max-width: 980px; margin: 0 auto; }
 }
+
+/* Pi Stream-inspired compact layout. The reference APK uses a 432dp home
+   feature, 24dp content gutters, and 42dp primary actions; keep Astral's
+   existing red identity while using the same simple, touch-first rhythm. */
+:root {
+  --ink: #0A0A0D;
+  --ink-2: #181A20;
+  --ink-3: #2B2D37;
+  --paper: #D4D3DC;
+  --muted: #898E9A;
+  --accent: #E92749;
+  --ember: #FF637A;
+  --line: rgba(212, 211, 220, .1);
+  --tint: #E92749;
+  --r-sm: 7px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --gut: 24px;
+  --rail-gap: 10px;
+  --nav-h: 60px;
+}
+
+body { background: var(--ink); }
+
+.nav {
+  background: rgba(10, 10, 13, .96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top-color: rgba(212, 211, 220, .09);
+}
+
+.nav button {
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 550;
+}
+
+.nav button[aria-current="page"] { color: var(--accent); }
+.nav button[aria-current="page"] svg { stroke: var(--accent); }
+
+.hero {
+  height: min(432px, 56vh);
+  min-height: 360px;
+  max-height: 432px;
+}
+
+.hero-body { bottom: 24px; }
+.hero-actions { gap: 10px; }
+.hero-actions .btn { min-width: 136px; height: 42px; border-radius: 8px; }
+
+.btn {
+  height: 42px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.btn-tint {
+  color: #fff;
+  background: var(--accent);
+}
+
+.btn-line {
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .14);
+}
+
+.rail { margin-top: 24px; }
+.rail-head { margin-bottom: 10px; }
+.rail-head p { font-size: 12px; }
+
+.card { width: 112px; }
+.resume-card { width: 120px; }
+.card-art { border-radius: 8px; box-shadow: none; }
+.card-art .score { color: var(--ember); }
+.card h4 { margin-top: 7px; font-size: 12.5px; font-weight: 600; }
+
+.brand { gap: 10px; padding-top: calc(var(--safe-t) + 12px); }
+.brand-logo { width: 32px; height: 32px; border-radius: 8px; }
+.brand b { font-size: 16px; }
+.menu-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  background: rgba(24, 26, 32, .92);
+}
+
+.player {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.player-bar {
+  gap: 10px;
+  padding: calc(var(--safe-t) + 10px) var(--gut) 10px;
+}
+
+.player-bar button {
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
+  color: var(--paper);
+  background: var(--ink-2);
+}
+
+.player-bar .t b { font-size: 14px; }
+.player-bar .t span { font-size: 12px; }
+
+.player-stage { padding: 0 var(--gut); }
+.player-frame {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.player-empty-mark {
+  border-radius: 10px;
+  color: var(--accent);
+  background: rgba(233, 39, 73, .12);
+}
+
+.player-toolbar {
+  gap: 8px;
+  padding: 12px var(--gut) 4px;
+}
+
+.player-control {
+  min-height: 44px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .09);
+  color: var(--paper);
+  font-size: 11.5px;
+}
+
+.player-control-main {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.player-control-main.on {
+  color: var(--accent);
+  background: rgba(233, 39, 73, .12);
+}
+
+.player-options {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 9px;
+  padding: 8px var(--gut) 12px;
+}
+
+.player-languages {
+  align-self: flex-start;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .1);
+}
+
+.player-languages button {
+  min-height: 34px;
+  padding: 5px 13px;
+  border-radius: 6px;
+}
+
+.player-languages button.on {
+  color: #fff;
+  background: var(--accent);
+}
+
+.player-quality {
+  width: 100%;
+  min-height: 42px;
+  justify-content: space-between;
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .1);
+  color: var(--paper);
+  font-size: 12px;
+}
+
+.player-quality select { max-width: 58%; }
+
+.player-downloads {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 8px;
+  overflow: visible;
+}
+
+.player-downloads > span {
+  grid-column: 1 / -1;
+  color: var(--paper);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.download-quality {
+  min-height: 42px;
+  justify-content: center;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .12);
+  font-size: 11.5px;
+}
+
+.download-quality.is-downloading {
+  color: var(--accent);
+  border-color: rgba(233, 39, 73, .55);
+  background: rgba(233, 39, 73, .1);
+}
+
+.download-note {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid rgba(212, 211, 220, .1);
+  border-radius: 8px;
+  background: var(--ink-2);
+}
+
+.player-hint { font-size: 11.5px; }
+.player-episodes { padding-bottom: calc(16px + var(--safe-b)); }
+.player-episodes-head { margin-bottom: 8px; }
+.player-episode-grid { gap: 7px; max-height: 160px; }
+.player-episode {
+  min-height: 42px;
+  border-radius: 7px;
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .1);
+}
+
+.player-episode.on { background: var(--accent); border-color: var(--accent); }
+.player-episode.seen:not(.on) { color: var(--accent); border-color: rgba(233, 39, 73, .45); }
+
+.downloads-head { align-items: center; }
+.downloads-list { gap: 9px; }
+.download-item {
+  gap: 11px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--ink-2);
+  border-color: rgba(212, 211, 220, .09);
+}
+
+.download-item > img { width: 60px; height: 86px; border-radius: 6px; }
+.download-item-actions .btn { min-height: 36px; border-radius: 7px; }
+.download-item-body .download-ready { color: #78D7A0; }
+
+.sheet {
+  border-radius: 14px 14px 0 0;
+  background: #181A20;
+}
+
+.sheet-grip { background: rgba(212, 211, 220, .25); }
+
+@media (min-width: 620px) {
+  :root { --gut: 24px; --rail-gap: 12px; }
+  .card { width: 132px; }
+  .resume-card { width: 140px; }
+}
+
+@media (max-width: 380px) {
+  :root { --gut: 16px; }
+  .player-toolbar { gap: 6px; }
+  .player-control { gap: 4px; padding-inline: 6px; font-size: 10.5px; }
+  .player-control svg { width: 14px; height: 14px; }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .player-options {
+    display: grid;
+    grid-template-columns: auto minmax(130px, 1fr);
+    gap: 6px 10px;
+    padding: 3px 12px;
+  }
+  .player-options > [data-player-hint] { display: none; }
+  .player-options > [data-player-download-container] { grid-column: 1 / -1; }
+  .player-downloads { grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); }
+  .player-empty { min-height: 0; gap: 3px; padding: 10px; }
+  .player-empty-mark { width: 34px; height: 34px; margin-bottom: 0; }
+  .player-empty h3 { font-size: 13px; }
+  .player-empty p { display: none; }
+}

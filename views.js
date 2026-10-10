@@ -777,7 +777,7 @@ export function playerDownloadControl(playback = null) {
 
   return `
     <div class="player-downloads" aria-label="Download qualities">
-      <span>Save</span>
+      <span>Download</span>
       ${variants.map((variant, index) => {
         const label = variant.quality && variant.quality !== 'Auto'
           ? variant.quality
