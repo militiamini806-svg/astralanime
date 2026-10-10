@@ -1,6 +1,6 @@
 /* app.js — routing, events, orchestration. */
 
-import { Api, anivexaPlayback, playbackUrl } from './api.js';
+import { Api, licensedPlayback } from './api.js';
 import { Store } from './store.js';
 import { Auth, authUrl } from './auth.js';
 import * as V from './views.js';
@@ -41,7 +41,7 @@ const ctx = () => ({ source: Store.settings.source, adult: Store.settings.adult 
  * Bump APP_VERSION here (and tag/release the same string on GitHub, e.g.
  * "v0.2.0") whenever you cut a new build. */
 const APP_VERSION = '0.1.0';
-const UPDATE_REPO = 'northernblader-sys/cloud-astral';
+const UPDATE_REPO = 'militiamini806-svg/astralanime';
 const UPDATE_RELEASES_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
 const UPDATE_WHATSAPP_URL = 'https://whatsapp.com/channel/0029VaqhhiQA2pL54CiJ0x2p';
 /* Set true to make the popup block the app until the user updates. */
@@ -134,7 +134,7 @@ function openPlayer(
     episode: Math.max(1, chosen),
     language,
     playbackRequest: 0,
-    anivexaPlayback: null,
+    licensedPlayback: null,
     offline,
     playback: initialPlayback
   };
@@ -170,18 +170,6 @@ function setPlayerHint(text) {
   if (hint) hint.textContent = text;
 }
 
-function updatePlayerServers(state) {
-  document.querySelectorAll('[data-player-server]').forEach(button => {
-    const server = button.dataset.playerServer;
-    const active = server === 'megaplay'
-      ? state.playback?.provider === 'megaplay'
-      : Boolean(state.anivexaPlayback) && state.playback?.provider !== 'megaplay';
-    button.classList.toggle('on', active);
-    button.disabled = server === 'anivexa' && !state.anivexaPlayback;
-    button.setAttribute('aria-pressed', String(active));
-  });
-}
-
 function renderPlayerPlayback(state, playback, hint) {
   if (playerState !== state) return;
   const frame = document.querySelector('#player .player-frame');
@@ -194,7 +182,6 @@ function renderPlayerPlayback(state, playback, hint) {
   const downloads = document.querySelector('[data-player-download-container]');
   if (downloads) downloads.innerHTML = V.playerDownloadControl(playback);
   setPlayerHint(hint);
-  updatePlayerServers(state);
 
   const video = frame.querySelector('video');
   if (video) {
@@ -204,20 +191,10 @@ function renderPlayerPlayback(state, playback, hint) {
         setPlayerHint('The saved file could not be opened');
         return;
       }
-      renderMegaPlayFallback(state, 'Anivexa playback failed · MegaPlay fallback');
+      setPlayerHint('Playback could not start. Check the authorized media provider.');
     }, { once: true });
     video.play?.().catch(() => {});
   }
-}
-
-function renderMegaPlayFallback(state, hint = 'Anivexa unavailable · MegaPlay fallback') {
-  if (playerState !== state) return;
-  const url = playbackUrl(state.media, state.episode, state.language);
-  if (!url) {
-    renderPlayerPlayback(state, null, 'No playable source available');
-    return;
-  }
-  renderPlayerPlayback(state, { kind: 'iframe', url, provider: 'megaplay' }, hint);
 }
 
 async function loadPlayerPlayback(state) {
@@ -225,24 +202,27 @@ async function loadPlayerPlayback(state) {
   const request = ++state.playbackRequest;
 
   try {
-    const primary = await anivexaPlayback(state.media, state.episode, state.language);
+    const primary = await licensedPlayback(state.media, state.episode, state.language);
     if (playerState !== state || state.playbackRequest !== request) return;
     if (primary) {
-      state.anivexaPlayback = primary;
+      state.licensedPlayback = primary;
       const quality = primary.quality && primary.quality !== 'Auto'
         ? ` · ${primary.quality}`
         : '';
-      renderPlayerPlayback(state, primary, `${primary.label || 'Anivexa'}${quality}`);
+      renderPlayerPlayback(state, primary, `${primary.label}${quality}`);
       return;
     }
-    state.anivexaPlayback = null;
+    state.licensedPlayback = null;
   } catch {
-    /* The fallback below is the expected path when Anivexa is unreachable. */
-    state.anivexaPlayback = null;
+    state.licensedPlayback = null;
   }
 
   if (playerState === state && state.playbackRequest === request) {
-    renderMegaPlayFallback(state);
+    renderPlayerPlayback(
+      state,
+      null,
+      'No authorized media provider is configured'
+    );
   }
 }
 
@@ -443,7 +423,7 @@ async function hydratePlayer(src, id, episode) {
     nextBtn.removeAttribute('disabled');
   }
 
-  /* A library stub may not contain the AniList ID needed by Anivexa. */
+  /* A library stub may not contain the catalogue ID needed by a provider. */
   loadPlayerPlayback(playerState);
 }
 
@@ -675,6 +655,8 @@ async function downloadPlayerVariant(variant, button) {
   }
 
   const media = playerState.media;
+  const episode = playerState.episode;
+  const language = playerState.language;
   const title = Store.titleOf(media);
   const meta = {
     url: variant.downloadUrl,
@@ -684,11 +666,12 @@ async function downloadPlayerVariant(variant, button) {
     title,
     cover: media.cover || '',
     color: media.color || null,
-    episode: playerState.episode,
-    language: playerState.language,
+    episode,
+    language,
     source: variant.downloadIndex,
     quality: variant.quality || `Quality ${Number(variant.downloadIndex) + 1}`,
-    provider: playerState.playback?.provider || 'anivexa',
+    provider: playerState.playback?.provider || 'authorized',
+    downloadAllowed: variant.downloadAllowed === true,
     totalEpisodes: V.episodeRows(media).length
   };
 
@@ -706,7 +689,7 @@ async function downloadPlayerVariant(variant, button) {
         button.querySelector('span')?.replaceChildren(document.createTextNode(`${percent}%`));
       }
     });
-    toast(`Saved ${title} episode ${playerState.episode} offline`);
+    toast(`Saved ${title} episode ${episode} offline`);
   } catch (error) {
     toast(error.message || 'Download failed');
   } finally {
@@ -927,29 +910,6 @@ document.addEventListener('click', async e => {
   if (playerEpisode && playerState) {
     const n = Number(playerEpisode.dataset.playerEpisode);
     if (n > 0) openPlayer(playerState.media, n, playerState.language);
-    return;
-  }
-
-  const playerServer = t.closest('[data-player-server]');
-  if (playerServer && playerState) {
-    if (playerServer.dataset.playerServer === 'megaplay') {
-      renderMegaPlayFallback(playerState, 'MegaPlay selected · Server 2');
-      return;
-    }
-
-    if (playerState.anivexaPlayback) {
-      const primary = playerState.anivexaPlayback;
-      const quality = primary.quality && primary.quality !== 'Auto'
-        ? ` · ${primary.quality}`
-        : '';
-      renderPlayerPlayback(
-        playerState,
-        primary,
-        `${primary.label || 'Anivexa · Server 1'}${quality}`
-      );
-    } else {
-      toast('Anivexa is unavailable for this episode');
-    }
     return;
   }
 
@@ -1236,7 +1196,7 @@ document.addEventListener('change', async e => {
     );
     if (selected) {
       const source = playerState.playback;
-      const label = source.label || `Anivexa · ${source.provider || 'provider'}`;
+      const label = source.label || 'Licensed provider';
       const qualityLabel = selected.quality && selected.quality !== 'Auto'
         ? ` · ${selected.quality}`
         : '';
@@ -1287,19 +1247,6 @@ document.addEventListener('keydown', e => {
 });
 
 window.addEventListener('hashchange', route);
-
-/* Playback events are sent by the embedded player. Only trust its origin. */
-window.addEventListener('message', e => {
-  if (!playerState || !['https://megaplay.buzz', 'https://www.megaplay.buzz'].includes(e.origin)) return;
-  let data = e.data;
-  if (typeof data === 'string') {
-    try { data = JSON.parse(data); } catch { return; }
-  }
-  if (data?.event === 'complete') {
-    markPlayerEpisode();
-    toast('Episode completed');
-  }
-});
 
 /* Android hardware back button, when running inside Capacitor */
 document.addEventListener('deviceready', () => {}, false);

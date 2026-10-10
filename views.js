@@ -6,20 +6,7 @@ import { Auth, authUrl } from './auth.js';
 
 /* ── brand ───────────────────────────────────────────────── */
 
-export const LOGO = `
-  <svg viewBox="0 0 64 64" aria-hidden="true">
-    <defs>
-      <linearGradient id="astral" x1="16" y1="8" x2="50" y2="56" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#FF3B52"/>
-        <stop offset=".55" stop-color="#E8102F"/>
-        <stop offset="1" stop-color="#8E0018"/>
-      </linearGradient>
-    </defs>
-    <path d="M13 53 L32 11 L51 53" fill="none" stroke="url(#astral)" stroke-width="7.5"
-          stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M32 30 C32.8 36.4 34.6 38.2 40 39 C34.6 39.8 32.8 41.6 32 48 C31.2 41.6 29.4 39.8 24 39 C29.4 38.2 31.2 36.4 32 30 Z"
-          fill="#FFF1F2"/>
-  </svg>`;
+export const LOGO = '<img class="brand-logo" src="img/app-icon.png" alt="">';
 
 export function brandBar() {
   const u = Auth.user;
@@ -516,7 +503,7 @@ export function downloadsView(items = []) {
           }).join('')}
         </section>` : empty(
           'No offline episodes',
-          'Choose a quality in the player and press Download to save an episode here.',
+          'Episodes appear here after your licensed provider returns a downloadable MP4.',
           '<a class="btn btn-tint" href="#/home">Browse anime</a>'
         )}
     </div>`;
@@ -713,8 +700,7 @@ export function episodeGrid(m, current) {
 /* ── player ──────────────────────────────────────────────── */
 
 /**
- * Render the actual playback surface. Anivexa may return either a direct
- * HLS/MP4 URL or an embed URL, while MegaPlay is always an embed fallback.
+ * Render the direct video surface returned by the configured media provider.
  */
 export function playerSurface(m, episode, playback = null) {
   const title = Store.titleOf(m);
@@ -722,8 +708,8 @@ export function playerSurface(m, episode, playback = null) {
     return `
       <div class="player-empty player-loading">
         <div class="player-empty-mark">${svg('play')}</div>
-        <h3>Finding a stream…</h3>
-        <p>Trying Anivexa providers first.</p>
+        <h3>Checking your provider…</h3>
+        <p>Looking for an authorized episode source.</p>
       </div>`;
   }
 
@@ -752,8 +738,8 @@ export function playerSurface(m, episode, playback = null) {
 
   return `<div class="player-empty">
     <div class="player-empty-mark">${svg('play')}</div>
-    <h3>Episode unavailable</h3>
-    <p>No playable source was returned by Anivexa or MegaPlay.</p>
+    <h3>Provider not connected</h3>
+    <p>Connect a media provider you own or are licensed to use to play this episode.</p>
   </div>`;
 }
 
@@ -784,9 +770,9 @@ export function playerDownloadControl(playback = null) {
   }
 
   const variants = (playback?.variants || [])
-    .filter(variant => variant.downloadUrl);
+    .filter(variant => variant.downloadAllowed === true && variant.downloadUrl);
   if (!variants.length) {
-    return '<span class="download-note">Download unavailable for this server</span>';
+    return '<span class="download-note">No authorized offline file available</span>';
   }
 
   return `
@@ -802,7 +788,7 @@ export function playerDownloadControl(playback = null) {
     </div>`;
 }
 
-/** In-app episode player with Anivexa loading before the MegaPlay fallback. */
+/** In-app episode player backed only by the app owner's authorized provider. */
 export function playerView(m, episode = 1, language = 'sub', playback = { loading: true }, offline = false) {
   const episodes = episodeRows(m);
   const current = episodes.find(e => e.n === Number(episode)) || episodes[0];
@@ -834,16 +820,7 @@ export function playerView(m, episode = 1, language = 'sub', playback = { loadin
                    <p>The episode list will appear after an official release.</p></div>`}
         </div>
       </div>
-      ${offline
-        ? '<div class="player-offline-badge">Offline download</div>'
-        : `<div class="player-servers" data-player-servers role="group" aria-label="Playback servers">
-          <button class="player-server on" data-player-server="anivexa" disabled>
-            <b>Server 1</b><span>Anivexa</span>
-          </button>
-          <button class="player-server" data-player-server="megaplay">
-            <b>Server 2</b><span>MegaPlay</span>
-          </button>
-        </div>`}
+      ${offline ? '<div class="player-offline-badge">Offline download</div>' : ''}
        <div class="player-toolbar">
          <button class="player-control${previous ? '' : ' disabled'}" data-player-episode="${previous || ''}" ${previous ? '' : 'disabled'} aria-label="Previous episode">
            ${svg('previous')}<span>Previous</span>
@@ -862,7 +839,7 @@ export function playerView(m, episode = 1, language = 'sub', playback = { loadin
          </div>
          <div data-player-quality-container>${playerQualityControl(playback)}</div>
          <div data-player-download-container>${playerDownloadControl(playback)}</div>
-         <span class="player-hint" data-player-hint>Trying Anivexa first…</span>
+          <span class="player-hint" data-player-hint>Checking authorized provider…</span>
        </div>
        <div class="player-episodes">
          <div class="player-episodes-head"><b>Episodes</b><span>${total || 0} available</span></div>

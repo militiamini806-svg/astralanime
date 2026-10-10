@@ -115,43 +115,17 @@ async function deleteFile(path) {
   await p.deleteFile({ directory: DATA, path }).catch(() => {});
 }
 
-/** Streams `url` into memory and writes it through the Filesystem plugin. */
-async function browserDownload(url, path, onProgress) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Download failed (${response.status})`);
-  const total = Number(response.headers.get('content-length')) || 0;
-  const reader = response.body?.getReader();
-
-  let bytes;
-  if (!reader) {
-    bytes = new Uint8Array(await response.arrayBuffer());
-  } else {
-    const chunks = [];
-    let received = 0;
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      chunks.push(next.value);
-      received += next.value.length;
-      onProgress?.(total ? received / total : 0);
-    }
-    bytes = new Uint8Array(received);
-    let offset = 0;
-    chunks.forEach(chunk => {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    });
+function authorizedMp4Url(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      /\.mp4$/i.test(url.pathname);
+  } catch {
+    return false;
   }
-
-  // Build the base64 string in slices so large files do not blow the stack
-  // or create millions of one-character strings.
-  let binary = '';
-  const SLICE = 0x8000;
-  for (let i = 0; i < bytes.length; i += SLICE) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + SLICE));
-  }
-  await fs().writeFile({ directory: DATA, path, data: btoa(binary) });
-  onProgress?.(1);
 }
 
 /* ── public API (unchanged shape) ─────────────────────────────────── */
@@ -171,7 +145,18 @@ export const Downloads = {
   },
 
   async download(meta, onProgress) {
-    if (!meta?.url) throw new Error('This source has no downloadable file');
+    if (meta?.downloadAllowed !== true) {
+      throw new Error('The media provider has not authorized offline downloads for this episode');
+    }
+    if (!authorizedMp4Url(meta?.url)) {
+      throw new Error('Offline downloads require a direct HTTPS MP4 from the authorized provider');
+    }
+    if (!isNative()) {
+      throw new Error('Offline downloads are available in the installed Android app');
+    }
+    const transfer = plugin('FileTransfer');
+    if (!transfer) throw new Error('Native file transfer is not available in this build');
+
     await ensureDirectory();
 
     const key = itemKey(meta);
@@ -198,31 +183,23 @@ export const Downloads = {
         onProgress?.(progress);
       };
 
-      const transfer = plugin('FileTransfer');
-      if (isNative() && transfer) {
-        const uri = await localUri(path);
-        const progressListener = await transfer.addListener('progress', event => {
-          const percent = Number(event?.percent);
-          const got = Number(event?.bytes);
-          const contentLength = Number(event?.contentLength);
-          const progress = Number.isFinite(percent)
-            ? percent / 100
-            : contentLength > 0
-              ? got / contentLength
-              : 0;
-          if (progress > 0) report(Math.min(1, progress));
-        }).catch(() => null);
+      const uri = await localUri(path);
+      const progressListener = await transfer.addListener('progress', event => {
+        const percent = Number(event?.percent);
+        const got = Number(event?.bytes);
+        const contentLength = Number(event?.contentLength);
+        const progress = Number.isFinite(percent)
+          ? percent / 100
+          : contentLength > 0
+            ? got / contentLength
+            : 0;
+        if (progress > 0) report(Math.min(1, progress));
+      }).catch(() => null);
 
-        try {
-          await transfer.downloadFile({ url: meta.url, path: uri, progress: true });
-        } catch (nativeError) {
-          if (!globalThis.fetch) throw nativeError;
-          await browserDownload(meta.url, path, report);
-        } finally {
-          progressListener?.remove?.();
-        }
-      } else {
-        await browserDownload(meta.url, path, report);
+      try {
+        await transfer.downloadFile({ url: meta.url, path: uri, progress: true });
+      } finally {
+        progressListener?.remove?.();
       }
 
       item.status = 'complete';

@@ -1010,7 +1010,14 @@ a { color: inherit; text-decoration: none; }
   z-index: 100;
 }
 
-.boot svg { width: 58px; height: 58px; animation: breathe 2.4s ease-in-out infinite; }
+.boot img {
+  width: 68px;
+  height: 68px;
+  border-radius: 18px;
+  object-fit: cover;
+  animation: breathe 2.4s ease-in-out infinite;
+  box-shadow: 0 0 38px rgba(232, 16, 47, .22);
+}
 
 @keyframes breathe {
   0%, 100% { opacity: .55; transform: scale(.96) }
@@ -1028,7 +1035,13 @@ a { color: inherit; text-decoration: none; }
   padding: calc(var(--safe-t) + 14px) var(--gut) 10px;
 }
 
-.brand svg { width: 26px; height: 26px; flex: none; }
+.brand-logo {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 9px;
+  object-fit: cover;
+}
 
 .brand b {
   font-size: 17px;
@@ -1275,48 +1288,6 @@ a { color: inherit; text-decoration: none; }
 .player-frame video {
   object-fit: contain;
   background: #000;
-}
-
-.player-servers {
-  display: flex;
-  gap: 8px;
-  padding: 10px var(--gut) 0;
-}
-
-.player-server {
-  min-width: 108px;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--ink-2);
-  color: var(--muted);
-  text-align: left;
-}
-
-.player-server b,
-.player-server span {
-  display: block;
-}
-
-.player-server b {
-  color: var(--paper);
-  font-size: 12px;
-}
-
-.player-server span {
-  margin-top: 2px;
-  font-size: 10px;
-}
-
-.player-server.on {
-  border-color: var(--tint);
-  color: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--tint);
-}
-
-.player-server:disabled {
-  cursor: not-allowed;
-  opacity: .45;
 }
 
 .player-empty {

@@ -33,7 +33,8 @@ jobs:
       # android/ is generated, not committed. Create it on the first run.
       - name: Generate Android project
         run: |
-          if [ ! -d android ]; then npx cap add android; fi
+          if [ ! -d android ]; then npm run android:add; fi
+          npm run prepare:web
           npx cap sync android
 
       - name: Install launcher icons and colours

@@ -4,11 +4,12 @@
   "private": true,
   "description": "Astralanime — anime discovery and tracking. AniList and MyAnimeList catalogues, AniList sign-in, local library.",
   "scripts": {
-    "serve": "npx --yes http-server www -p 5173 -c-1",
-    "android:add": "cap add android",
-    "android:sync": "cap sync android",
+    "prepare:web": "sh scripts/prepare-web.sh",
+    "serve": "npm run prepare:web && npx --yes http-server www -p 5173 -c-1",
+    "android:add": "npm run prepare:web && cap add android",
+    "android:sync": "npm run prepare:web && cap sync android",
     "android:open": "cap open android",
-    "android:build": "cap sync android && cd android && ./gradlew assembleDebug"
+    "android:build": "npm run prepare:web && cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

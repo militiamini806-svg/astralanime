@@ -12,25 +12,27 @@ Deep black, one red. No backend, no framework, no build step.
 ## Contents
 
 ```
-www/
-  index.html            shell, splash, bottom nav
-  img/logo.svg          the A mark
-  css/app.css           the whole visual system
-  js/api.js             AniList GraphQL + MyAnimeList (Jikan), one shared shape
-  js/auth.js            AniList sign-in and two-way list sync
-  js/store.js           localStorage: library, progress, episode ticks, settings
-  js/views.js           every screen's markup
-  js/app.js             hash router, events, orchestration
+index.html               shell, splash, bottom nav
+img/app-icon.png         supplied red-haired character artwork
+app.css                  the whole visual system
+api.js                   AniList GraphQL + MyAnimeList (Jikan), one shared shape
+auth.js                  AniList sign-in and two-way list sync
+store.js                 localStorage: library, progress, episode ticks, settings
+views.js                 every screen's markup
+app.js                   hash router, events, orchestration
+downloads.js             authorized Android offline downloads
+media-provider.js        optional first-party playback adapter
+www/                     generated web assets for Capacitor
 resources/
-  icon.svg              source artwork
-  android/              launcher icons at every density + colours
+  artwork/               original app-icon image
+  android/               launcher icons at every density + colours
 capacitor.config.json
 package.json
-.github/workflows/android.yml
+.github/workflows/main.yml
 ```
 
-About 100 KB of source, 150 KB of icons. The `www` folder ships into the APK
-exactly as it is, which is why the build stays small.
+The root files are the source of truth. `npm run prepare:web` copies them into
+`www/`, which Capacitor packages into the APK.
 
 ## Screens
 
@@ -71,53 +73,45 @@ to AniList if the official MAL request is unavailable. Jikan is kept only as a
 read fallback and is rate limited to about 3 requests a second, so `api.js`
 queues its calls.
 
-## Playback source priority
+## Playback and offline downloads
 
-Episode playback now tries the Anivexa API first, then falls back to the
-existing MegaPlay embed if Anivexa is unavailable or returns no playable
-source. Anivexa is queried only for AniList catalogue records because its
-routes require an AniList ID. MyAnimeList-only records continue directly to
-MegaPlay.
+No streaming provider is preconfigured. AniList and MyAnimeList supply anime
+metadata, not rights to play or download episodes. The player connects only to
+a media API that you own or are licensed to use.
 
-For local testing, start Anivexa on port 4000:
+`media-provider.js` is the adapter for that API. Set
+`ASTRAL_MEDIA_API_BASE` there to its HTTPS origin and implement
+`GET /v1/playback` using the query parameters in the adapter. The response can
+be a single variant or a `variants` array, for example:
 
-```bash
-cd Anivexa-API
-npm install
-npm start
+```json
+{
+  "label": "My licensed catalog",
+  "variants": [
+    {
+      "url": "https://media.example.com/episode-1.mp4",
+      "quality": "1080p",
+      "downloadAllowed": true,
+      "downloadUrl": "https://media.example.com/episode-1.mp4"
+    }
+  ]
+}
 ```
 
-The packaged app is configured to use `https://anixera.up.railway.app`. For a
-different Android APK or hosted web build, edit
-`DEFAULT_ANIVEXA_API_BASE` near the top of `api.js` to the public HTTPS URL of
-your deployed Anivexa API. The app requests providers in this order:
+The API must check the user's rights and entitlement before returning media
+URLs. `downloadAllowed` is a UI signal, not an authorization check. The app
+accepts direct HTTPS MP4/WebM playback; the Download button appears only for a
+direct HTTPS MP4 explicitly marked as downloadable by your provider. It does
+not download embeds, HLS/DASH playlists, or files from third-party streaming
+services.
 
-```text
-reanime → anikoto → animegg → aniwaves → mkissa → 2dhive → anizone → anibd → kaa
-```
+On Android, Capacitor File Transfer saves the authorized MP4 into the app's
+private data directory and reports progress. The Downloads tab lists completed
+files, plays them offline, and supports delete and clear-all. Offline files
+remain private to the app; uninstalling the app removes them. Downloads are
+not available in the browser preview.
 
-When Anivexa returns multiple variants, the player shows a quality selector
-and lets the viewer switch without leaving the episode. Embed results are
-preferred when supplied because they work reliably in Chrome and Android
-WebView. Direct MP4/WebM results use the in-app video element; raw HLS
-`.m3u8` results are kept as a fallback when no embed is available. If an
-Anivexa source cannot be used, MegaPlay is loaded automatically.
-
-The player also exposes two manual server buttons: **Server 1 — Anivexa** and
-**Server 2 — MegaPlay**. Anivexa is selected by default when it has a source,
-but the viewer can switch to MegaPlay manually.
-
-## Offline downloads
-
-The APK shows a download button for every direct video quality returned by
-Anivexa. Downloads are converted to MP4 by the Node/Railway backend and saved
-in the Android app's private data directory. The **Downloads** tab lists saved
-episodes, opens them without a network connection, and provides delete and
-clear-all controls.
-
-Embed-only servers do not show a download button because an iframe is not a
-downloadable file. The backend must be deployed with FFmpeg; see
-`BACKEND_DOWNLOAD_SETUP.md` in the backend package.
+See `MEDIA_PROVIDER_SETUP.md` for the response contract and local build steps.
 
 ## Signing in to AniList
 
@@ -173,7 +167,7 @@ generated during the build; committing it causes merge pain for no benefit.
 
 ## 2. Let the Action build it
 
-The push triggers `.github/workflows/android.yml`. Watch it under the **Actions**
+The push triggers `.github/workflows/main.yml`. Watch it under the **Actions**
 tab. It installs Node and Java, generates the Android project, copies your
 launcher icons in, enables shrinking, and builds a debug and a release APK.
 
@@ -236,7 +230,7 @@ the end of the workflow and push a tag like `v1.0.0`:
 
 ```bash
 npm install
-npx cap add android
+npm run android:add
 cp -r resources/android/. android/app/src/main/res/
 npm run android:build        # android/app/build/outputs/apk/debug/
 ```
@@ -256,9 +250,9 @@ Studio if you'd rather build there.
 - **Palette** — the custom properties at the top of `app.css`. `--tint` is the
   only one rewritten at runtime; turning on cover tinting in Settings lets each
   title repaint it with its own artwork colour.
-- **Logo** — `www/img/logo.svg` is the source. After changing it, regenerate the
-  launcher icons with `cairosvg` at the densities listed in
-  `resources/android/`.
+- **App icon** — `resources/artwork/astralanime-icon-source.jpg` is the supplied
+  source image. The PNG copies are used by the app header, splash screen,
+  browser icon, and Android launcher.
 
 ## Licence
 
